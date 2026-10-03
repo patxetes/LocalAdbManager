@@ -7,11 +7,14 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 
 /**
- * Estructura de datos que almacena la información descriptiva de un APK.
+ * Almacena los metadatos visuales y técnicos extraídos de un paquete.
  */
 data class PackageDetails(
     val displayName: String,
@@ -23,99 +26,118 @@ data class PackageDetails(
 )
 
 /**
- * Utilidad encargada del análisis sintáctico de paquetes Android.
+ * Analizador universal de paquetes Android.
+ * Extrae nombre, versión e icono real desde APK, XAPK, APKS o ZIP.
  */
 object ApkParser {
 
-    /**
-     * Punto de entrada: Extrae los metadatos esenciales a partir del Uri del archivo.
-     */
+    private const val TAG_LOG = "ApkParser"
+
     fun extractDetails(context: Context, sourceUri: Uri): PackageDetails? {
-        val totalBytes = resolveFileSize(context, sourceUri)
-        val temporaryFile = createTemporaryCopy(context, sourceUri) ?: return null
+        val totalBytes = obtenerTamanoFichero(context, sourceUri)
+
+        // Archivo temporal para inspeccionar con PackageManager
+        val archivoTemporal = File(context.cacheDir, "inspeccion_temporal.tmp")
+        if (!copiarStreamAFichero(context, sourceUri, archivoTemporal)) {
+            return null
+        }
+
+        val packageManager = context.packageManager
 
         try {
-            val packageManager = context.packageManager
-            val packageInfo = inspectArchive(packageManager, temporaryFile.absolutePath) ?: return null
-
-            return buildDetailsObject(packageManager, packageInfo, totalBytes)
-        } finally {
-            // Garantizar la liberación de espacio borrando el temporal
-            if (temporaryFile.exists()) {
-                temporaryFile.delete()
+            // Intento 1: ¿Es un APK simple?
+            val infoDirecta = parsearManifiesto(packageManager, archivoTemporal.absolutePath)
+            if (infoDirecta != null) {
+                return construirDetalles(packageManager, infoDirecta, archivoTemporal.absolutePath, totalBytes)
             }
-        }
-    }
 
-    /**
-     * Consulta el tamaño exacto del archivo al proveedor de contenidos de Android.
-     */
-    private fun resolveFileSize(context: Context, uri: Uri): Long {
-        var size: Long = 0
-        val cursor = context.contentResolver.query(uri, null, null, null, null)
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val sizeIndex = it.getColumnIndex(OpenableColumns.SIZE)
-                if (sizeIndex != -1) {
-                    size = it.getLong(sizeIndex)
+            // Intento 2: ¿Es un contenedor (XAPK/APKS/ZIP)? Extraemos el base.apk
+            val baseExtraido = extraerBaseDeContenedor(archivoTemporal, context.cacheDir)
+            if (baseExtraido != null) {
+                try {
+                    val infoBundle = parsearManifiesto(packageManager, baseExtraido.absolutePath)
+                    if (infoBundle != null) {
+                        return construirDetalles(packageManager, infoBundle, baseExtraido.absolutePath, totalBytes)
+                    }
+                } finally {
+                    baseExtraido.delete()
                 }
             }
+
+            return null
+        } catch (e: Exception) {
+            Log.e(TAG_LOG, "Error al extraer metadatos del paquete", e)
+            return null
+        } finally {
+            if (archivoTemporal.exists()) {
+                archivoTemporal.delete()
+            }
         }
-        return size
     }
 
-    /**
-     * Vuelca el stream del Uri a un fichero temporal en caché para permitir la inspección.
-     */
-    private fun createTemporaryCopy(context: Context, uri: Uri): File? {
+    private fun extraerBaseDeContenedor(ficheroZip: File, directorioSalida: File): File? {
         return try {
-            val targetFile = File(context.cacheDir, "inspection_cache.apk")
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(targetFile).use { output ->
+            val zip = ZipFile(ficheroZip)
+            val entradas = zip.entries().toList()
+
+            val entradasApk = entradas.filter { it.name.endsWith(".apk", ignoreCase = true) }
+            if (entradasApk.isEmpty()) {
+                zip.close()
+                return null
+            }
+
+            // Seleccionar el APK principal
+            val entradaPrincipal: ZipEntry = entradasApk.firstOrNull { it.name.contains("base", ignoreCase = true) }
+                ?: entradasApk.maxByOrNull { it.size }
+                ?: entradasApk.first()
+
+            val ficheroSalida = File(directorioSalida, "inspeccion_base.apk")
+            zip.getInputStream(entradaPrincipal).use { input ->
+                FileOutputStream(ficheroSalida).use { output ->
                     input.copyTo(output)
                 }
             }
-            targetFile
+            zip.close()
+            ficheroSalida
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.w(TAG_LOG, "No se pudo extraer base del contenedor: ${e.message}")
             null
         }
     }
 
-    /**
-     * Utiliza el PackageInstaller de Android para parsear el AndroidManifest binario interno.
-     */
     @Suppress("DEPRECATION")
-    private fun inspectArchive(pm: PackageManager, archivePath: String): PackageInfo? {
+    private fun parsearManifiesto(pm: PackageManager, rutaFichero: String): PackageInfo? {
         return try {
             val flags = PackageManager.GET_META_DATA
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.getPackageArchiveInfo(archivePath, PackageManager.PackageInfoFlags.of(flags.toLong()))
+                pm.getPackageArchiveInfo(rutaFichero, PackageManager.PackageInfoFlags.of(flags.toLong()))
             } else {
-                pm.getPackageArchiveInfo(archivePath, flags)
+                pm.getPackageArchiveInfo(rutaFichero, flags)
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
             null
         }
     }
 
     /**
-     * Construye y mapea los datos obtenidos en nuestra estructura PackageDetails.
+     * Construye el modelo de datos asignando sourceDir para cargar el icono real.
      */
-    private fun buildDetailsObject(
+    private fun construirDetalles(
         pm: PackageManager,
         info: PackageInfo,
-        fileSize: Long
+        rutaArchivoReal: String,
+        tamanoBytes: Long
     ): PackageDetails {
         val appInfo = info.applicationInfo
-        appInfo?.sourceDir = null
-        appInfo?.publicSourceDir = null
 
-        val name = appInfo?.loadLabel(pm)?.toString() ?: info.packageName
-        val icon = appInfo?.loadIcon(pm)
+        // Clave: sourceDir debe apuntar al archivo físico para cargar los recursos gráficos del APK
+        appInfo?.sourceDir = rutaArchivoReal
+        appInfo?.publicSourceDir = rutaArchivoReal
 
-        val code: Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        val nombreApp = appInfo?.loadLabel(pm)?.toString() ?: info.packageName
+        val icono = appInfo?.loadIcon(pm)
+
+        val codigoVersion: Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             info.longVersionCode
         } else {
             @Suppress("DEPRECATION")
@@ -123,12 +145,40 @@ object ApkParser {
         }
 
         return PackageDetails(
-            displayName = name,
+            displayName = nombreApp,
             identifier = info.packageName,
-            versionName = info.versionName ?: "N/A",
-            versionCode = code,
-            fileSizeBytes = fileSize,
-            appIcon = icon
+            versionName = info.versionName ?: "N/D",
+            versionCode = codigoVersion,
+            fileSizeBytes = tamanoBytes,
+            appIcon = icono
         )
+    }
+
+    private fun obtenerTamanoFichero(context: Context, uri: Uri): Long {
+        var tamano: Long = 0
+        val cursor = context.contentResolver.query(uri, null, null, null, null)
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val index = it.getColumnIndex(OpenableColumns.SIZE)
+                if (index != -1) {
+                    tamano = it.getLong(index)
+                }
+            }
+        }
+        return tamano
+    }
+
+    private fun copiarStreamAFichero(context: Context, origen: Uri, destino: File): Boolean {
+        return try {
+            context.contentResolver.openInputStream(origen)?.use { input ->
+                FileOutputStream(destino).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG_LOG, "Error copiando stream de URI", e)
+            false
+        }
     }
 }

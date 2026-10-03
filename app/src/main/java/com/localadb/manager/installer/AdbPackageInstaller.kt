@@ -2,154 +2,260 @@ package com.localadb.manager.installer
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.util.Log
 import com.localadb.manager.adb.AdbConnectionManager
+import java.io.BufferedReader
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.InputStreamReader
 import java.io.OutputStream
 import java.util.regex.Pattern
+import java.util.zip.ZipFile
 
-/**
- * Resultado devuelto al finalizar el proceso de instalación.
- */
 sealed class InstallResult {
     object Success : InstallResult()
     data class Failure(val reason: String) : InstallResult()
 }
 
 /**
- * Motor de instalación en streaming mediante sesiones del PackageInstaller de Android vía ADB.
+ * Motor de instalación en streaming mediante sesiones de PackageInstaller.
+ * Gestiona el ciclo de vida del canal ADB con reintentos y tolerancia a retardos del sistema.
  */
 object AdbPackageInstaller {
 
-    private const val BUFFER_SIZE = 64 * 1024 // Buffer de lectura de 64 KB (óptimo para sockets)
+    private const val ETIQUETA_LOG = "AdbPackageInstaller"
+    private const val TAMANO_BUFFER = 64 * 1024 // 64 KB
 
-    /**
-     * Orquestador principal de la instalación: ejecuta las 3 fases (create -> write -> commit).
-     *
-     * @param context Contexto de la aplicación para resolver el Uri
-     * @param adbManager Conexión activa con permisos de shell (UID 2000)
-     * @param apkUri Uri del archivo APK seleccionado
-     * @param totalBytes Tamaño en bytes del APK
-     * @param onProgress Callback para reportar el porcentaje (0 a 100) y el mensaje de estado
-     */
     fun install(
         context: Context,
         adbManager: AdbConnectionManager,
+        targetPort: Int,
         apkUri: Uri,
-        totalBytes: Long,
+        bundleAnalysis: BundleAnalysisResult,
         onProgress: (percent: Int, status: String) -> Unit
     ): InstallResult {
 
-        // FASE 1: Crear la sesión en el gestor de paquetes
-        onProgress(0, "Creando sesión de instalación...")
-        val sessionId = createSession(adbManager, totalBytes)
-            ?: return InstallResult.Failure("No se pudo iniciar la sesión en el PackageInstaller.")
+        val stagingDir = File(context.cacheDir, "install_staging")
+        limpiarDirectorio(stagingDir)
+        stagingDir.mkdirs()
+
+        // 1. Conexión limpia y aislada para esta instalación
+        onProgress(2, "Conectando al demonio local ADB...")
+        val conexionOk = adbManager.connectDevice("127.0.0.1", targetPort)
+        if (!conexionOk) {
+            return InstallResult.Failure("No se pudo conectar a ADB en el puerto $targetPort. Comprueba que la depuración Wi-Fi esté activa.")
+        }
 
         try {
-            // FASE 2: Transmitir los bytes del APK al socket stdin de ADB
-            onProgress(0, "Transmitiendo binario...")
-            val streamSuccess = writeStreamToSession(context, adbManager, sessionId, apkUri, totalBytes, onProgress)
-            if (!streamSuccess) {
-                abandonSession(adbManager, sessionId)
-                return InstallResult.Failure("Fallo durante la transferencia de bytes hacia ADB.")
+            val archivosAInstalar = mutableListOf<File>()
+
+            if (bundleAnalysis.isBundle) {
+                onProgress(8, "Extrayendo fragmentos del contenedor...")
+                val splits = extraerSplitsConZipFile(context, apkUri, stagingDir)
+                if (splits.isEmpty()) {
+                    return InstallResult.Failure("No se encontraron APKs compatibles en el contenedor.")
+                }
+                archivosAInstalar.addAll(splits)
+            } else {
+                onProgress(8, "Preparando archivo APK...")
+                val apkUnico = File(stagingDir, "base.apk")
+                copiarUriAFichero(context, apkUri, apkUnico)
+                archivosAInstalar.add(apkUnico)
             }
 
-            // FASE 3: Confirmar la sesión para que el SO instale la app
-            onProgress(100, "Instalando en el sistema...")
-            val commitOutput = commitSession(adbManager, sessionId)
+            // 2. Crear sesión en PackageInstaller con tolerancia a esperas
+            onProgress(15, "Iniciando sesión en PackageInstaller...")
+            val sesionId = crearSesionConReintentos(adbManager)
+                ?: return InstallResult.Failure("El gestor de paquetes de Android está ocupado. Inténtalo de nuevo en unos segundos.")
 
-            return if (commitOutput.contains("Success", ignoreCase = true)) {
+            // 3. Transmitir los fragmentos
+            val resultadoEnvio = transmitirArchivosASesion(
+                adbManager = adbManager,
+                sesionId = sesionId,
+                archivos = archivosAInstalar,
+                onProgress = onProgress
+            )
+
+            if (resultadoEnvio is InstallResult.Failure) {
+                cancelarSesionAdb(adbManager, sesionId)
+                return resultadoEnvio
+            }
+
+            // 4. Confirmar la sesión
+            onProgress(95, "Validando firmas e instalando en el sistema...")
+            val respuestaCommit = confirmarSesionAdb(adbManager, sesionId)
+
+            return if (respuestaCommit.contains("Success", ignoreCase = true)) {
                 InstallResult.Success
             } else {
-                InstallResult.Failure(commitOutput.ifEmpty { "Error desconocido al confirmar instalación." })
+                InstallResult.Failure(respuestaCommit.ifEmpty { "Error devuelto por el Package Manager al confirmar." })
             }
 
         } catch (e: Exception) {
-            abandonSession(adbManager, sessionId)
-            return InstallResult.Failure(e.localizedMessage ?: "Excepción no controlada durante instalación.")
+            Log.e(ETIQUETA_LOG, "Excepción durante la instalación", e)
+            return InstallResult.Failure(e.localizedMessage ?: "Error inesperado durante la instalación.")
+        } finally {
+            // Desconectar siempre el socket y borrar temporales de disco
+            adbManager.disconnectDevice()
+            limpiarDirectorio(stagingDir)
         }
     }
 
-    /**
-     * Paso 1: Ejecuta 'pm install-create' y parsea el Session ID devuelto.
-     * Flags:
-     *  -r: Reinstalar la aplicación manteniendo datos previos.
-     *  -t: Permitir instalación de paquetes marcados para testeo.
-     *  -d: Permitir degradación de versión (downgrade).
-     *  -S: Tamaño total esperado en bytes.
-     */
-    private fun createSession(adbManager: AdbConnectionManager, totalBytes: Long): String? {
-        val command = "pm install-create -r -t -d -S $totalBytes"
-        val response = adbManager.executeCommand(command)
+    private fun extraerSplitsConZipFile(context: Context, uri: Uri, stagingDir: File): List<File> {
+        val resultado = mutableListOf<File>()
+        val abisDispositivo = Build.SUPPORTED_ABIS
 
-        // El sistema responde con el patrón: "Success: [12345678]"
-        val matcher = Pattern.compile("\\[(\\d+)\\]").matcher(response)
-        return if (matcher.find()) {
-            matcher.group(1)
-        } else {
-            null
+        val ficheroContenedor = File(stagingDir, "origen.tmp")
+        copiarUriAFichero(context, uri, ficheroContenedor)
+
+        try {
+            val zip = ZipFile(ficheroContenedor)
+            val entradas = zip.entries()
+
+            while (entradas.hasMoreElements()) {
+                val entrada = entradas.nextElement()
+                val nombre = entrada.name
+
+                if (nombre.endsWith(".apk", ignoreCase = true)) {
+                    if (esSplitCompatible(nombre, abisDispositivo)) {
+                        val nombreLimpio = File(nombre).name
+                        val destino = File(stagingDir, nombreLimpio)
+
+                        zip.getInputStream(entrada).use { input ->
+                            FileOutputStream(destino).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+
+                        resultado.add(destino)
+                        Log.d(ETIQUETA_LOG, "Split extraído: $nombreLimpio (${destino.length()} bytes)")
+                    }
+                }
+            }
+            zip.close()
+        } catch (e: Exception) {
+            Log.e(ETIQUETA_LOG, "Error leyendo contenedor con ZipFile", e)
+        } finally {
+            if (ficheroContenedor.exists()) {
+                ficheroContenedor.delete()
+            }
         }
+
+        return normalizarBaseApk(resultado)
     }
 
-    /**
-     * Paso 2: Abre un canal virtual en ADB ('pm install-write ... -') y canaliza los bytes del APK.
-     */
-    private fun writeStreamToSession(
-        context: Context,
+    private fun normalizarBaseApk(ficheros: List<File>): List<File> {
+        if (ficheros.isEmpty()) return ficheros
+
+        val yaExisteBase = ficheros.firstOrNull { it.name.equals("base.apk", ignoreCase = true) }
+        if (yaExisteBase != null) return ficheros
+
+        val principal = ficheros.firstOrNull { it.name.contains("base", ignoreCase = true) }
+            ?: ficheros.maxByOrNull { it.length() }
+            ?: ficheros.first()
+
+        val destinoBase = File(principal.parentFile, "base.apk")
+        principal.renameTo(destinoBase)
+
+        return ficheros.map { if (it == principal) destinoBase else it }
+    }
+
+    private fun transmitirArchivosASesion(
         adbManager: AdbConnectionManager,
-        sessionId: String,
-        apkUri: Uri,
-        totalBytes: Long,
+        sesionId: String,
+        archivos: List<File>,
         onProgress: (percent: Int, status: String) -> Unit
-    ): Boolean {
-        val inputStream: InputStream = context.contentResolver.openInputStream(apkUri) ?: return false
+    ): InstallResult {
+        val total = archivos.size
 
-        return try {
-            // El '-' al final indica al comando que debe leer del stdin del stream
-            val command = "exec:pm install-write -S $totalBytes $sessionId base.apk -"
-            val adbStream = adbManager.openStream(command)
-            val outputStream: OutputStream = adbStream.openOutputStream()
+        for ((index, archivo) in archivos.withIndex()) {
+            val tamano = archivo.length()
+            val nombre = archivo.name
 
-            val buffer = ByteArray(BUFFER_SIZE)
-            var bytesRead: Int
-            var totalBytesSent: Long = 0
+            val progreso = 20 + ((index * 70) / total)
+            onProgress(progreso, "Transmitiendo ($index de $total): $nombre...")
 
-            // Bombeo continuo de bytes con actualización periódica de porcentaje
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                outputStream.write(buffer, 0, bytesRead)
-                totalBytesSent += bytesRead
+            val comando = "exec:pm install-write -S $tamano $sesionId $nombre -"
+            val canalAdb = adbManager.abrirCanalRobusto(comando)
+            val socketOut: OutputStream = canalAdb.openOutputStream()
 
-                if (totalBytes > 0) {
-                    val percent = ((totalBytesSent * 100) / totalBytes).toInt()
-                    onProgress(percent, "Transmitiendo: $percent%")
+            FileInputStream(archivo).use { fis ->
+                val buffer = ByteArray(TAMANO_BUFFER)
+                var read: Int
+                while (fis.read(buffer).also { read = it } != -1) {
+                    socketOut.write(buffer, 0, read)
                 }
             }
 
-            outputStream.flush()
-            outputStream.close()
-            inputStream.close()
-            adbStream.close()
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            try { inputStream.close() } catch (_: Exception) {}
-            false
+            socketOut.flush()
+
+            val reader = BufferedReader(InputStreamReader(canalAdb.openInputStream()))
+            val respuesta = reader.readLine()?.trim() ?: ""
+            canalAdb.close()
+
+            Log.d(ETIQUETA_LOG, "Escrito $nombre ($tamano bytes) -> Respuesta: $respuesta")
+
+            if (!respuesta.contains("Success", ignoreCase = true)) {
+                return InstallResult.Failure("Fallo al escribir [$nombre]: $respuesta")
+            }
+
+            // Pausa de 120 ms para asegurar que el kernel de Android complete el vaciado del socket
+            Thread.sleep(120)
+        }
+        return InstallResult.Success
+    }
+
+    /**
+     * Intenta crear la sesión con reintentos para evitar bloqueos si el sistema está cerrando un paquete anterior.
+     */
+    private fun crearSesionConReintentos(adbManager: AdbConnectionManager): String? {
+        val comando = "pm install-create -r -t -d"
+        val patron = Pattern.compile("\\[(\\d+)\\]")
+
+        for (intento in 1..3) {
+            val respuesta = adbManager.executeCommand(comando)
+            val matcher = patron.matcher(respuesta)
+            if (matcher.find()) {
+                return matcher.group(1)
+            }
+            Log.w(ETIQUETA_LOG, "Intento $intento de crear sesión fallido ($respuesta). Esperando 400ms...")
+            Thread.sleep(400)
+        }
+        return null
+    }
+
+    private fun confirmarSesionAdb(adbManager: AdbConnectionManager, sesionId: String): String {
+        return adbManager.executeCommand("pm install-commit $sesionId")
+    }
+
+    private fun cancelarSesionAdb(adbManager: AdbConnectionManager, sesionId: String) {
+        try {
+            adbManager.executeCommand("pm install-abandon $sesionId")
+        } catch (_: Exception) {}
+    }
+
+    private fun copiarUriAFichero(context: Context, uri: Uri, destino: File) {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(destino).use { output ->
+                input.copyTo(output)
+            }
         }
     }
 
-    /**
-     * Paso 3: Ejecuta 'pm install-commit' para que el sistema valide firmas y consolide la app.
-     */
-    private fun commitSession(adbManager: AdbConnectionManager, sessionId: String): String {
-        val command = "pm install-commit $sessionId"
-        return adbManager.executeCommand(command)
+    private fun limpiarDirectorio(dir: File) {
+        if (dir.exists() && dir.isDirectory) {
+            dir.listFiles()?.forEach { it.delete() }
+        }
     }
 
-    /**
-     * Cancela la sesión en el gestor de paquetes para liberar memoria si ocurrió algún fallo.
-     */
-    private fun abandonSession(adbManager: AdbConnectionManager, sessionId: String) {
-        try {
-            adbManager.executeCommand("pm install-abandon $sessionId")
-        } catch (_: Exception) {}
+    private fun esSplitCompatible(nombre: String, abisSoportadas: Array<String>): Boolean {
+        val abisConocidas = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+        val minusculas = nombre.lowercase().replace('_', '-')
+
+        val abiEncontrada = abisConocidas.firstOrNull { minusculas.contains(it) } ?: return true
+        return abisSoportadas.any { it.lowercase().replace('_', '-') == abiEncontrada }
     }
 }

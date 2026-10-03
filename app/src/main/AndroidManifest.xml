@@ -1,13 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Permisos para comunicación de red local y sockets loopback (127.0.0.1) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-
-    <!-- Permiso para notificaciones interactivas en Android 13 (API 33) o superior -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -20,16 +17,12 @@
             android:name=".MainActivity"
             android:exported="true">
 
-            <!-- Lanzador estándar de la aplicación desde el escritorio -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- 
-                Filtro 1: Captura archivos APK abiertos mediante esquema de contenido (content://)
-                utilizado por la mayoría de gestores de archivos modernos y descargas.
-            -->
+            <!-- 1. Asociación estándar para archivos APK -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -38,9 +31,6 @@
                 <data android:mimeType="application/vnd.android.package-archive" />
             </intent-filter>
 
-            <!-- 
-                Filtro 2: Captura archivos abiertos directamente con esquema de fichero local (file://)
-            -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -48,20 +38,61 @@
                 <data android:mimeType="application/vnd.android.package-archive" />
             </intent-filter>
 
-            <!-- 
-                Filtro 3: Soporte para gestores de archivos que no declaran el MIME type y usan la extensión
-            -->
+            <!-- 2. Asociación para paquetes XAPK (.xapk) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.xapk" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.xapk" />
+            </intent-filter>
+
+            <!-- 3. Asociación para paquetes APKS (.apks) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.apks" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.apks" />
+            </intent-filter>
+
+            <!-- 4. Filtro MIME comodín para gestores de archivos genéricos -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="content" />
-                <data android:host="*" />
-                <data android:pathPattern=".*\\.apk" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:pathPattern=".*\\.(apk|xapk|apks)" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/zip" />
+                <data android:pathPattern=".*\\.(apk|xapk|apks)" />
             </intent-filter>
 
         </activity>
 
-        <!-- Receptor de eventos para la notificación interactiva de pairing -->
         <receiver
             android:name=".adb.PairingNotificationReceiver"
             android:exported="false" />

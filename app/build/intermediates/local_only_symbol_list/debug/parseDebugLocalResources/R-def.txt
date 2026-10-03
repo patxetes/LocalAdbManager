@@ -9,7 +9,9 @@ string apk_label
 string apk_no_file_selected
 string apk_package
 string apk_parsing_error
+string apk_single_detected
 string apk_size
+string apk_splits_detected
 string apk_version
 string app_name
 string btn_connect_adb
@@ -25,7 +27,7 @@ string install_status_committing
 string install_status_creating_session
 string install_status_failed
 string install_status_idle
-string install_status_streaming
+string install_status_streaming_split
 string install_status_success
 string mdns_service_connect_found
 string mdns_service_not_found

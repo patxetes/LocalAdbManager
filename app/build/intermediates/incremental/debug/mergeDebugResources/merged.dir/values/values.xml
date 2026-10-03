@@ -105,18 +105,20 @@
     <string name="androidx_startup" translatable="false">androidx.startup</string>
     <string name="apk_info_title">Información del Paquete Seleccionado</string>
     <string name="apk_label">Aplicación: %1$s</string>
-    <string name="apk_no_file_selected">Ningún archivo APK seleccionado aún.</string>
+    <string name="apk_no_file_selected">Ningún archivo seleccionado aún.</string>
     <string name="apk_package">Paquete: %1$s</string>
-    <string name="apk_parsing_error">Error al analizar el archivo APK: %1$s</string>
+    <string name="apk_parsing_error">Error al analizar el archivo: %1$s</string>
+    <string name="apk_single_detected">Tipo: APK clásico independiente (Monolítico)</string>
     <string name="apk_size">Tamaño: %1$.2f MB</string>
+    <string name="apk_splits_detected">Tipo: Bundle con %1$d partes compatibles detectadas</string>
     <string name="apk_version">Versión: %1$s (Código: %2$d)</string>
     <string name="app_name">Local ADB Manager</string>
     <string name="btn_connect_adb">Conectar a ADB</string>
     <string name="btn_disconnect_adb">Desconectar</string>
-    <string name="btn_install_apk">Instalar APK por ADB</string>
+    <string name="btn_install_apk">Instalar por ADB</string>
     <string name="btn_open_dev_settings">Abrir Ajustes de Desarrollador</string>
     <string name="btn_run_id_cmd">Ejecutar \"id\"</string>
-    <string name="btn_select_apk">Seleccionar archivo APK</string>
+    <string name="btn_select_apk">Seleccionar archivo (APK, APKS, XAPK, ZIP)</string>
     <string name="btn_show_pairing_notification">Mostrar Notificación de Emparejamiento</string>
     <string name="btn_start_scan">Iniciar Escaneo mDNS</string>
     <string name="btn_stop_scan">Detener Escaneo</string>
@@ -135,10 +137,10 @@
     <string name="in_progress">In progress</string>
     <string name="indeterminate">Partially checked</string>
     <string name="install_status_committing">Confirmando e instalando paquete…</string>
-    <string name="install_status_creating_session">Creando sesión en PackageInstaller…</string>
+    <string name="install_status_creating_session">Creando sesión multi-split en PackageInstaller…</string>
     <string name="install_status_failed">Error de instalación: %1$s</string>
     <string name="install_status_idle">Esperando selección de archivo…</string>
-    <string name="install_status_streaming">Transmitiendo binario al sistema (%1$d%%)…</string>
+    <string name="install_status_streaming_split">Transmitiendo parte %1$d de %2$d (%3$s)…</string>
     <string name="install_status_success">¡Aplicación instalada con éxito!</string>
     <string name="m3c_bottom_sheet_collapse_description">Collapse bottom sheet</string>
     <string name="m3c_bottom_sheet_dismiss_description">Dismiss bottom sheet</string>
@@ -229,7 +231,7 @@
     <string name="tab">Tab</string>
     <string name="template_percent"><ns2:g id="percentage">%1$d</ns2:g> percent.</string>
     <string name="title_crypto_ok">Hito 1.1: Criptografía Lista</string>
-    <string name="title_installer">Hito 2.2: Instalador ADB Streaming</string>
+    <string name="title_installer">Hito 2.3: Instalador de APKs y Bundles</string>
     <string name="title_mdns_search">Hito 1.2: Escáner mDNS</string>
     <string name="title_pairing">Hito 1.3: Emparejamiento Local</string>
     <string name="title_shell_exec">Hito 1.4: Consola Shell ADB</string>

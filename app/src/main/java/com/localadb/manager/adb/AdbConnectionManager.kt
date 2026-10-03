@@ -1,125 +1,133 @@
 package com.localadb.manager.adb
 
 import android.content.Context
+import android.util.Log
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
+import io.github.muntashirakon.adb.AdbStream
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.security.PrivateKey
 import java.security.cert.Certificate
 
 /**
- * Gestor de Conexión y Ejecución ADB.
- *
- * Responsabilidad:
- *  - Mantener el socket TLS con el demonio local (127.0.0.1).
- *  - Abrir canales virtuales (Streams) para ejecución de comandos shell.
+ * Gestor de la conexión ADB local con recuperación automática ante caídas de socket.
  */
 class AdbConnectionManager private constructor(context: Context) : AbsAdbConnectionManager() {
 
-    // Obtenemos las claves RSA generadas en el Hito 1.1
-    private val keyManager = AdbKeyManager(context)
-    private val credentials = keyManager.getOrCreateCredentials()
+    private val gestorClaves = AdbKeyManager(context)
+    private val credenciales = gestorClaves.getOrCreateCredentials()
+
+    // Memoria del último destino conectado para permitir reconexión transparente
+    private var ultimoHost: String? = null
+    private var ultimoPuerto: Int = -1
 
     companion object {
-        @Volatile
-        private var instance: AdbConnectionManager? = null
+        private const val ETIQUETA_LOG = "AdbConnectionManager"
 
-        /**
-         * Singleton con inicialización sincronizada para acceso concurrente seguro.
-         */
+        @Volatile
+        private var instanciaUnica: AdbConnectionManager? = null
+
         fun getInstance(context: Context): AdbConnectionManager {
-            return instance ?: synchronized(this) {
-                instance ?: AdbConnectionManager(context.applicationContext).also { instance = it }
+            return instanciaUnica ?: synchronized(this) {
+                instanciaUnica ?: AdbConnectionManager(context.applicationContext).also {
+                    instanciaUnica = it
+                }
             }
         }
     }
 
-    // --- Métodos abstractos requeridos por libadb-android ---
-
     override fun getPrivateKey(): PrivateKey {
-        return credentials.privateKey
+        return credenciales.privateKey
     }
 
     override fun getCertificate(): Certificate {
-        return credentials.certificate
+        return credenciales.certificate
     }
 
     override fun getDeviceName(): String {
         return "LocalAdbManager"
     }
 
-    // --- Operaciones de red y control ---
-
     /**
-     * Realiza el emparejamiento criptográfico inicial (SPAKE2 + TLS 1.3).
+     * Empareja mediante SPAKE2.
      */
     fun pairDevice(host: String, port: Int, pairingCode: String): Boolean {
         return try {
             pair(host, port, pairingCode)
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(ETIQUETA_LOG, "Fallo al emparejar con $host:$port", e)
             false
         }
     }
 
     /**
-     * Establece la conexión persistente con el demonio ADB en el puerto especificado.
-     *
-     * @param host Generalmente "127.0.0.1" (interfaz loopback)
-     * @param port Puerto de conexión obtenido mediante el escáner mDNS
+     * Conecta al puerto del demonio adbd y registra los datos de destino.
      */
     fun connectDevice(host: String, port: Int): Boolean {
         return try {
-            // Invoca el handshake de autenticación RSA de libadb-android
+            disconnectDevice()
             connect(host, port)
+            ultimoHost = host
+            ultimoPuerto = port
+            Log.i(ETIQUETA_LOG, "Conectado exitosamente a ADB en $host:$port")
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(ETIQUETA_LOG, "Error al conectar a ADB en $host:$port", e)
             false
         }
     }
 
     /**
-     * Cierra el socket y libera los canales de comunicación activos.
+     * Cierra el socket de forma segura.
      */
     fun disconnectDevice() {
         try {
             close()
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Abre un flujo virtual con intento de reconexión si el socket murió tras una instalación previa.
+     */
+    fun abrirCanalRobusto(destino: String): AdbStream {
+        return try {
+            openStream(destino)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.w(ETIQUETA_LOG, "Canal caído ($destino). Intentando reconexión automática...", e)
+            val host = ultimoHost
+            val puerto = ultimoPuerto
+
+            if (host != null && puerto > 0) {
+                disconnectDevice()
+                connect(host, puerto)
+                // Segundo intento tras reconectar el socket
+                openStream(destino)
+            } else {
+                throw e
+            }
         }
     }
 
     /**
-     * Ejecuta un comando en el sistema operativo mediante el canal "exec:" de ADB.
-     *
-     * En términos de C: equivale a abrir una tubería (pipe) con popen("comando", "r"),
-     * leer la salida del descriptor de archivo hasta EOF y cerrar el descriptor.
-     *
-     * @param command Comando a ejecutar (ej: "id", "whoami", "pm list packages")
-     * @return La respuesta de texto generada por el comando
+     * Ejecuta comandos en shell capturando la salida y recuperando el enlace si estaba caído.
      */
     fun executeCommand(command: String): String {
         return try {
-            // Abrir un stream hacia el servicio "exec" de ADB
-            val stream = openStream("exec:$command")
+            val canal = abrirCanalRobusto("exec:$command")
+            val lector = BufferedReader(InputStreamReader(canal.openInputStream()))
+            val constructorSalida = StringBuilder()
 
-            // Leer los bytes devueltos por el sistema operativo
-            val reader = BufferedReader(InputStreamReader(stream.openInputStream()))
-            val outputBuilder = StringBuilder()
-            var line: String?
-
-            while (reader.readLine().also { line = it } != null) {
-                outputBuilder.append(line).append("\n")
+            var lineaLeida: String?
+            while (lector.readLine().also { lineaLeida = it } != null) {
+                constructorSalida.append(lineaLeida).append("\n")
             }
 
-            // Liberar la tubería (stream)
-            stream.close()
-
-            outputBuilder.toString().trim()
+            canal.close()
+            constructorSalida.toString().trim()
         } catch (e: Exception) {
-            "Error al ejecutar comando: ${e.localizedMessage}"
+            Log.e(ETIQUETA_LOG, "Error ejecutando comando shell: $command", e)
+            "Error: ${e.localizedMessage}"
         }
     }
 }
