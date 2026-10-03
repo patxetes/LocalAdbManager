@@ -6,125 +6,127 @@ import android.net.nsd.NsdServiceInfo
 import android.util.Log
 
 /**
- * Módulo de Descubrimiento de Red (mDNS / ZeroConf).
- *
- * Responsabilidad: Localizar dinámicamente en qué puertos TCP efímeros
- * está escuchando el demonio ADB del dispositivo.
+ * Gestor de descubrimiento de servicios mDNS (DNS-SD) para ADB inalámbrico.
+ * Localiza los puertos efímeros de conexión (_adb-tls-connect) y emparejamiento (_adb-tls-pairing).
  */
-class AdbMdnsManager(context: Context) {
+class AdbMdnsManager(private val context: Context) {
 
-    private val tag = "AdbMdnsManager"
-    private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
-
-    // Servicios estándar emitidos por Android 11+
-    private val serviceTypeConnect = "_adb-tls-connect._tcp."
-    private val serviceTypePairing = "_adb-tls-pairing._tcp."
-
-    // Punteros a los listeners activos para poder cancelarlos
-    private var connectListener: NsdManager.DiscoveryListener? = null
-    private var pairingListener: NsdManager.DiscoveryListener? = null
-
-    /**
-     * Interfaz de retorno de eventos (Callbacks estilo punteros a función en C)
-     */
     interface DiscoveryCallback {
         fun onConnectPortFound(port: Int)
         fun onPairingPortFound(port: Int)
         fun onError(message: String)
     }
 
-    /**
-     * Inicia la escucha de ambos tipos de servicio en la red local.
-     */
-    fun startDiscovery(callback: DiscoveryCallback) {
-        stopDiscovery() // Detener búsquedas previas si las hubiera
+    companion object {
+        private const val TAG = "AdbMdnsManager"
+        const val SERVICE_TYPE_CONNECT = "_adb-tls-connect._tcp."
+        const val SERVICE_TYPE_PAIRING = "_adb-tls-pairing._tcp."
 
-        connectListener = createDiscoveryListener(serviceTypeConnect, callback)
-        pairingListener = createDiscoveryListener(serviceTypePairing, callback)
+        // Registro estático en memoria para que PairingNotificationReceiver capture el puerto en vivo
+        @Volatile
+        var latestPairingPort: Int? = null
+
+        @Volatile
+        var latestConnectPort: Int? = null
+    }
+
+    private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
+    private var isDiscovering = false
+
+    private var connectListener: NsdManager.DiscoveryListener? = null
+    private var pairingListener: NsdManager.DiscoveryListener? = null
+
+    fun startDiscovery(callback: DiscoveryCallback) {
+        if (isDiscovering) {
+            stopDiscovery()
+        }
+        isDiscovering = true
+
+        connectListener = crearDiscoveryListener(SERVICE_TYPE_CONNECT) { port ->
+            latestConnectPort = port
+            callback.onConnectPortFound(port)
+        }
+
+        pairingListener = crearDiscoveryListener(SERVICE_TYPE_PAIRING) { port ->
+            latestPairingPort = port
+            callback.onPairingPortFound(port)
+        }
 
         try {
-            nsdManager.discoverServices(serviceTypeConnect, NsdManager.PROTOCOL_DNS_SD, connectListener)
-            nsdManager.discoverServices(serviceTypePairing, NsdManager.PROTOCOL_DNS_SD, pairingListener)
-            Log.d(tag, "Búsqueda mDNS iniciada con éxito.")
+            nsdManager.discoverServices(SERVICE_TYPE_CONNECT, NsdManager.PROTOCOL_DNS_SD, connectListener)
+            nsdManager.discoverServices(SERVICE_TYPE_PAIRING, NsdManager.PROTOCOL_DNS_SD, pairingListener)
+            Log.i(TAG, "Escaneo mDNS iniciado para conexión y emparejamiento.")
         } catch (e: Exception) {
-            Log.e(tag, "Fallo al iniciar mDNS", e)
-            callback.onError(e.localizedMessage ?: "Error iniciando mDNS")
+            Log.e(TAG, "Error iniciando descubrimiento mDNS", e)
+            callback.onError(e.localizedMessage ?: "Error al iniciar mDNS")
         }
     }
 
-    /**
-     * Detiene la escucha y libera recursos del socket de multidifusión.
-     */
     fun stopDiscovery() {
-        safelyStop(connectListener)
-        connectListener = null
+        if (!isDiscovering) return
+        isDiscovering = false
 
-        safelyStop(pairingListener)
+        try {
+            connectListener?.let { nsdManager.stopServiceDiscovery(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Aviso deteniendo listener de conexión", e)
+        }
+
+        try {
+            pairingListener?.let { nsdManager.stopServiceDiscovery(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Aviso deteniendo listener de emparejamiento", e)
+        }
+
+        connectListener = null
         pairingListener = null
     }
 
-    private fun safelyStop(listener: NsdManager.DiscoveryListener?) {
-        if (listener != null) {
-            try {
-                nsdManager.stopServiceDiscovery(listener)
-            } catch (e: Exception) {
-                Log.w(tag, "Aviso deteniendo listener: ${e.message}")
-            }
-        }
-    }
-
-    private fun createDiscoveryListener(
-        targetServiceType: String,
-        callback: DiscoveryCallback
-    ): NsdManager.DiscoveryListener {
+    private fun crearDiscoveryListener(serviceType: String, onPortResolved: (Int) -> Unit): NsdManager.DiscoveryListener {
         return object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(regType: String) {
-                Log.d(tag, "Escuchando servicio: $regType")
+                Log.d(TAG, "Descubrimiento iniciado para: $regType")
             }
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                Log.d(tag, "Servicio detectado: ${serviceInfo.serviceName}. Resolviendo dirección...")
-                resolveService(serviceInfo, targetServiceType, callback)
+                Log.d(TAG, "Servicio encontrado: ${serviceInfo.serviceName} ($serviceType)")
+                try {
+                    nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(service: NsdServiceInfo, errorCode: Int) {
+                            Log.e(TAG, "Fallo al resolver servicio mDNS: $errorCode")
+                        }
+
+                        override fun onServiceResolved(resolvedService: NsdServiceInfo) {
+                            val port = resolvedService.port
+                            Log.i(TAG, "Servicio resuelto: ${resolvedService.serviceName} en puerto: $port")
+                            if (port > 0) {
+                                onPortResolved(port)
+                            }
+                        }
+                    })
+                } catch (e: Exception) {
+                    Log.e(TAG, "Excepción resolviendo servicio mDNS", e)
+                }
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-                Log.d(tag, "Servicio perdido: ${serviceInfo.serviceName}")
+                Log.d(TAG, "Servicio perdido: ${serviceInfo.serviceName}")
+                if (serviceType == SERVICE_TYPE_PAIRING) {
+                    latestPairingPort = null
+                }
             }
 
             override fun onDiscoveryStopped(serviceType: String) {
-                Log.d(tag, "Escucha detenida: $serviceType")
+                Log.d(TAG, "Descubrimiento detenido para: $serviceType")
             }
 
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                callback.onError("Error de inicio mDNS: $errorCode")
+                Log.e(TAG, "Fallo al iniciar descubrimiento ($serviceType): $errorCode")
             }
 
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-                Log.w(tag, "Error deteniendo mDNS: $errorCode")
+                Log.e(TAG, "Fallo al detener descubrimiento ($serviceType): $errorCode")
             }
         }
-    }
-
-    private fun resolveService(
-        serviceInfo: NsdServiceInfo,
-        targetServiceType: String,
-        callback: DiscoveryCallback
-    ) {
-        nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                Log.w(tag, "Fallo resolviendo puerto para ${serviceInfo.serviceName}: $errorCode")
-            }
-
-            override fun onServiceResolved(resolvedInfo: NsdServiceInfo) {
-                val port = resolvedInfo.port
-                Log.i(tag, "Servicio resuelto -> $targetServiceType en puerto $port")
-
-                if (targetServiceType == serviceTypeConnect) {
-                    callback.onConnectPortFound(port)
-                } else if (targetServiceType == serviceTypePairing) {
-                    callback.onPairingPortFound(port)
-                }
-            }
-        })
     }
 }

@@ -17,15 +17,18 @@
     <string name="title_backup_options">Opciones de Respaldo</string>
     <string name="title_restore">Restaurar Copia de Seguridad</string>
     <string name="title_restore_options">Opciones de Restauración (.lam)</string>
+    <string name="title_manual_pairing">Emparejamiento ADB</string>
+    <string name="title_pairing_methods">Método de Emparejamiento</string>
+    <string name="title_split_pairing">Vinculación (Pantalla Dividida)</string>
+    <string name="title_manual_connect_port">Puerto de Conexión ADB</string>
+    <string name="title_usb_setup">Configuración Inicial USB (Standalone)</string>
 
-    <!-- Estados mDNS -->
+    <!-- Estados mDNS y Conexión -->
     <string name="mdns_status_idle">Escáner inactivo.</string>
-    <string name="mdns_status_searching">Buscando servicios de depuración en red local…</string>
-    <string name="mdns_service_connect_found">Puerto de Conexión: %1$d</string>
-    <string name="mdns_service_pairing_found">Puerto de Emparejamiento: %1$d</string>
-    <string name="mdns_service_not_found">Buscando depuración Wi-Fi…</string>
-
-    <!-- Estados de Conexión ADB -->
+    <string name="mdns_status_searching">Buscando depuración Wi-Fi…</string>
+    <string name="mdns_service_connect_found">Puerto Conexión: %1$d</string>
+    <string name="mdns_service_pairing_found">Puerto Emparejamiento: %1$d</string>
+    <string name="mdns_service_not_found">Sin puerto detectado (Usa USB o Ajustes)</string>
     <string name="adb_status_disconnected">Estado: Desconectado</string>
     <string name="adb_status_connected">Estado: Conectado a ADB local (127.0.0.1:%1$d)</string>
     <string name="adb_status_connecting">Conectando con el demonio ADB…</string>
@@ -34,8 +37,10 @@
     <!-- Botones de la UI -->
     <string name="btn_start_scan">Iniciar Escaneo mDNS</string>
     <string name="btn_stop_scan">Detener Escaneo</string>
+    <string name="btn_sync_scan">Sincronizar</string>
     <string name="btn_open_dev_settings">Ajustes</string>
     <string name="btn_show_pairing_notification">Emparejar</string>
+    <string name="btn_pair_action">Emparejar</string>
     <string name="btn_connect_adb">Conectar a ADB</string>
     <string name="btn_disconnect_adb">Desconectar</string>
     <string name="btn_run_id_cmd">Ejecutar \"id\"</string>
@@ -45,8 +50,31 @@
     <string name="btn_backup_action">Backup</string>
     <string name="btn_restore_file">Restaurar Copia (.apk, .apks, .lam, .tar.gz)</string>
     <string name="btn_refresh_catalog">Actualizar Lista</string>
+    <string name="btn_change_port">Cambiar Puerto</string>
+    <string name="btn_usb_setup_guide">Autorizar por USB</string>
     <string name="btn_cancel">Cancelar</string>
     <string name="btn_accept">Aceptar</string>
+
+    <!-- Textos de Configuración USB -->
+    <string name="usb_setup_desc">Para que la app funcione de forma totalmente autónoma (sin códigos ni pantallas divididas), autoriza la conexión local ejecutando una sola vez en tu PC:\n\nadb tcpip 5555\n\nO pulsa el botón inferior si ya estás conectado por TCP local.</string>
+    <string name="btn_connect_localhost_5555">Conectar a localhost:5555</string>
+
+    <!-- Selector de Métodos de Emparejamiento -->
+    <string name="pairing_methods_desc">Android cierra el código de vinculación al cambiar de app. Elige cómo prefieres emparejar:</string>
+    <string name="btn_pair_by_notification">1. Por Notificación</string>
+    <string name="btn_pair_by_notification_desc">Escribe el código desde la barra superior sin salir de Ajustes.</string>
+    <string name="btn_pair_by_split">2. Por Pantalla Dividida</string>
+    <string name="btn_pair_by_split_desc">Abre una ventana compacta para escribir teniendo Ajustes en la otra mitad.</string>
+    <string name="dialog_split_pairing_hint">Escribe el puerto y código que muestra la mitad de Ajustes:</string>
+
+    <!-- Diálogos de Emparejamiento y Conexión Manual -->
+    <string name="dialog_manual_connect_desc">Si el router no propaga mDNS, escribe el puerto de 5 dígitos que aparece en Ajustes > Depuración inalámbrica (Dirección IP y puerto).</string>
+    <string name="label_pairing_port">Puerto de vinculación (5 dígitos)</string>
+    <string name="label_pairing_code">Código de vinculación (6 dígitos)</string>
+    <string name="label_connect_port">Puerto de conexión (5 dígitos)</string>
+    <string name="pairing_in_progress">Emparejando dispositivo con ADB local…</string>
+    <string name="pairing_success">¡Dispositivo emparejado con éxito! Ya puedes realizar copias e instalaciones.</string>
+    <string name="pairing_failed">Error de emparejamiento: %1$s</string>
 
     <!-- Opciones del Diálogo de Backup -->
     <string name="backup_opt_apk">Copia de APK / Bundle</string>
@@ -65,7 +93,7 @@
     <string name="notification_channel_desc">Notificaciones para introducir el código de emparejamiento</string>
     <string name="notification_title">Emparejamiento ADB Activo</string>
     <string name="notification_text">Despliega e introduce el código de 6 dígitos de Ajustes</string>
-    <string name="notification_input_label">Código de 6 dígitos</string>
+    <string name="notification_input_label">Código (ej: 123456 o \'Puerto Código\')</string>
     <string name="notification_action_send">Emparejar</string>
     <string name="notification_pairing_success">¡Dispositivo emparejado con éxito!</string>
     <string name="notification_pairing_failed">Fallo en el emparejamiento: %1$s</string>

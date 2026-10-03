@@ -26,6 +26,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,11 +34,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -58,7 +63,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -70,6 +74,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
@@ -117,7 +122,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .systemBarsPadding(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     AppNavegacionPrincipal(
@@ -125,7 +132,7 @@ class MainActivity : ComponentActivity() {
                         adbManager = adbConnectionManager,
                         initialApkUri = selectedApkUri.value,
                         onOpenSettings = { openDeveloperSettings() },
-                        onShowNotification = { port -> showPairingNotification(port) }
+                        onLanzarNotificacionEmparejamiento = { port -> lanzarNotificacionEmparejamiento(port) }
                     )
                 }
             }
@@ -151,7 +158,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openDeveloperSettings() {
-        val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+        val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
         startActivity(intent)
     }
 
@@ -178,13 +187,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun showPairingNotification(pairingPort: Int) {
+    fun lanzarNotificacionEmparejamiento(pairingPort: Int?) {
+        checkNotificationPermission()
+
         val remoteInput = RemoteInput.Builder(PairingNotificationReceiver.KEY_TEXT_REPLY)
-            .setLabel(getString(R.string.notification_input_label))
+            .setLabel("Código (ej: 123456 o 'Puerto Código')")
             .build()
 
         val intent = Intent(this, PairingNotificationReceiver::class.java).apply {
-            putExtra(PairingNotificationReceiver.EXTRA_PAIRING_PORT, pairingPort)
+            if (pairingPort != null) {
+                putExtra(PairingNotificationReceiver.EXTRA_PAIRING_PORT, pairingPort)
+            }
         }
 
         val pendingIntent = PendingIntent.getBroadcast(
@@ -206,6 +219,7 @@ class MainActivity : ComponentActivity() {
             .setContentText(getString(R.string.notification_text))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
+            .setAutoCancel(true)
             .addAction(action)
             .build()
 
@@ -215,7 +229,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * Contenedor principal con barra de pestañas (Instalador / Copias de Seguridad).
+ * Contenedor principal con cabecera de control ADB y navegación gestual por pestañas.
  */
 @Composable
 fun AppNavegacionPrincipal(
@@ -223,11 +237,25 @@ fun AppNavegacionPrincipal(
     adbManager: AdbConnectionManager,
     initialApkUri: Uri?,
     onOpenSettings: () -> Unit,
-    onShowNotification: (Int) -> Unit
+    onLanzarNotificacionEmparejamiento: (Int?) -> Unit
 ) {
-    var pestanaActual by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(pageCount = { 2 })
+
     var connectPort by remember { mutableStateOf<Int?>(null) }
     var pairingPort by remember { mutableStateOf<Int?>(null) }
+    var manualConnectPort by remember { mutableStateOf<Int?>(null) }
+
+    var showPairingMethodDialog by remember { mutableStateOf(false) }
+    var showSplitScreenPairingDialog by remember { mutableStateOf(false) }
+    var showManualConnectDialog by remember { mutableStateOf(false) }
+    var showUsbSetupDialog by remember { mutableStateOf(false) }
+
+    var dialogPairingResultText by remember { mutableStateOf<String?>(null) }
+    var isPairingLoading by remember { mutableStateOf(false) }
+
+    val effectiveConnectPort = manualConnectPort ?: connectPort
 
     val mdnsCallback = remember {
         object : AdbMdnsManager.DiscoveryCallback {
@@ -241,6 +269,13 @@ fun AppNavegacionPrincipal(
         }
     }
 
+    fun reiniciarEscanerMdns() {
+        connectPort = null
+        pairingPort = null
+        mdnsManager.stopDiscovery()
+        mdnsManager.startDiscovery(mdnsCallback)
+    }
+
     LaunchedEffect(Unit) {
         mdnsManager.startDiscovery(mdnsCallback)
     }
@@ -250,36 +285,364 @@ fun AppNavegacionPrincipal(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = pestanaActual) {
+
+        // =====================================================================
+        // CABECERA GLOBAL: ESTADO ADB, SINCRONIZACIÓN Y ACCIONES RÁPIDAS
+        // =====================================================================
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Column(modifier = Modifier.padding(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val textoPuerto = if (effectiveConnectPort != null) {
+                        stringResource(R.string.mdns_service_connect_found, effectiveConnectPort)
+                    } else {
+                        stringResource(R.string.mdns_service_not_found)
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { showManualConnectDialog = true },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = textoPuerto,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (effectiveConnectPort != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedButton(
+                            onClick = { reiniciarEscanerMdns() },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                        ) {
+                            Text(text = stringResource(R.string.btn_sync_scan), fontSize = 10.sp)
+                        }
+
+                        Button(
+                            onClick = { showPairingMethodDialog = true },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                        ) {
+                            Text(text = stringResource(R.string.btn_pair_action), fontSize = 10.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = { showUsbSetupDialog = true },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                        ) {
+                            Text(text = "USB", fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        TabRow(selectedTabIndex = pagerState.currentPage) {
             Tab(
-                selected = pestanaActual == 0,
-                onClick = { pestanaActual = 0 },
+                selected = pagerState.currentPage == 0,
+                onClick = {
+                    coroutineScope.launch {
+                        pagerState.animateScrollToPage(0)
+                    }
+                },
                 text = { Text(text = stringResource(R.string.tab_installer)) }
             )
             Tab(
-                selected = pestanaActual == 1,
-                onClick = { pestanaActual = 1 },
+                selected = pagerState.currentPage == 1,
+                onClick = {
+                    coroutineScope.launch {
+                        pagerState.animateScrollToPage(1)
+                    }
+                },
                 text = { Text(text = stringResource(R.string.tab_backups)) }
             )
         }
 
-        if (pestanaActual == 0) {
-            InstallerScreen(
-                adbManager = adbManager,
-                connectPort = connectPort,
-                pairingPort = pairingPort,
-                initialApkUri = initialApkUri,
-                onOpenSettings = onOpenSettings,
-                onShowNotification = onShowNotification
-            )
-        } else {
-            BackupCatalogScreen(
-                adbManager = adbManager,
-                connectPort = connectPort,
-                mdnsManager = mdnsManager,
-                mdnsCallback = mdnsCallback
-            )
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize()
+        ) { pagina ->
+            when (pagina) {
+                0 -> InstallerScreen(
+                    adbManager = adbManager,
+                    connectPort = effectiveConnectPort,
+                    initialApkUri = initialApkUri,
+                    onOpenSettings = onOpenSettings,
+                    onShowPairingDialog = { showPairingMethodDialog = true }
+                )
+                1 -> BackupCatalogScreen(
+                    adbManager = adbManager,
+                    connectPort = effectiveConnectPort,
+                    mdnsManager = mdnsManager,
+                    mdnsCallback = mdnsCallback
+                )
+            }
         }
+    }
+
+    // =========================================================================
+    // DIÁLOGO 1: SELECTOR DE MÉTODO DE EMPAREJAMIENTO
+    // =========================================================================
+    if (showPairingMethodDialog) {
+        AlertDialog(
+            onDismissRequest = { showPairingMethodDialog = false },
+            title = { Text(text = stringResource(R.string.title_pairing_methods)) },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.pairing_methods_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onLanzarNotificacionEmparejamiento(pairingPort)
+                                onOpenSettings()
+                                showPairingMethodDialog = false
+                            },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = stringResource(R.string.btn_pair_by_notification), fontWeight = FontWeight.SemiBold)
+                            Text(text = stringResource(R.string.btn_pair_by_notification_desc), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showPairingMethodDialog = false
+                                showSplitScreenPairingDialog = true
+                            },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = stringResource(R.string.btn_pair_by_split), fontWeight = FontWeight.SemiBold)
+                            Text(text = stringResource(R.string.btn_pair_by_split_desc), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showPairingMethodDialog = false }) {
+                    Text(text = stringResource(R.string.btn_cancel))
+                }
+            }
+        )
+    }
+
+    // =========================================================================
+    // DIÁLOGO 2: VINCULACIÓN COMPACTA PARA PANTALLA DIVIDIDA
+    // =========================================================================
+    if (showSplitScreenPairingDialog) {
+        var inputPort by remember { mutableStateOf(pairingPort?.toString() ?: "") }
+        var inputCode by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { if (!isPairingLoading) showSplitScreenPairingDialog = false },
+            title = { Text(text = stringResource(R.string.title_split_pairing), fontSize = 17.sp) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        text = stringResource(R.string.dialog_split_pairing_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = inputPort,
+                        onValueChange = { if (it.length <= 5 && it.all { c -> c.isDigit() }) inputPort = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.label_pairing_port)) },
+                        placeholder = { Text("Ej: 41235") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = inputCode,
+                        onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) inputCode = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.label_pairing_code)) },
+                        placeholder = { Text("6 dígitos") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+
+                    if (isPairingLoading) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = stringResource(R.string.pairing_in_progress), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = inputPort.length in 4..5 && inputCode.length == 6 && !isPairingLoading,
+                    onClick = {
+                        val portInt = inputPort.toIntOrNull() ?: return@Button
+                        isPairingLoading = true
+
+                        coroutineScope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                adbManager.pairDevice("127.0.0.1", portInt, inputCode)
+                            }
+                            isPairingLoading = false
+                            showSplitScreenPairingDialog = false
+                            dialogPairingResultText = if (ok) {
+                                reiniciarEscanerMdns()
+                                context.getString(R.string.pairing_success)
+                            } else {
+                                context.getString(R.string.pairing_failed, "Código o puerto rechazado. Asegúrate de tener la ventana de Ajustes visible.")
+                            }
+                        }
+                    }
+                ) {
+                    Text(text = stringResource(R.string.btn_pair_action))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !isPairingLoading,
+                    onClick = { showSplitScreenPairingDialog = false }
+                ) {
+                    Text(text = stringResource(R.string.btn_cancel))
+                }
+            }
+        )
+    }
+
+    // =========================================================================
+    // DIÁLOGO DE GUÍA Y CONEXIÓN USB (STANDALONE)
+    // =========================================================================
+    if (showUsbSetupDialog) {
+        AlertDialog(
+            onDismissRequest = { showUsbSetupDialog = false },
+            title = { Text(text = stringResource(R.string.title_usb_setup)) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        text = stringResource(R.string.usb_setup_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            manualConnectPort = 5555
+                            showUsbSetupDialog = false
+                        }
+                    ) {
+                        Text(text = stringResource(R.string.btn_connect_localhost_5555))
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showUsbSetupDialog = false }) {
+                    Text(text = stringResource(R.string.btn_accept))
+                }
+            }
+        )
+    }
+
+    // =========================================================================
+    // DIÁLOGO PARA MODIFICAR EL PUERTO DE CONEXIÓN MANUALMENTE
+    // =========================================================================
+    if (showManualConnectDialog) {
+        var inputConnectPort by remember { mutableStateOf(effectiveConnectPort?.toString() ?: "") }
+
+        AlertDialog(
+            onDismissRequest = { showManualConnectDialog = false },
+            title = { Text(text = stringResource(R.string.title_manual_connect_port)) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        text = stringResource(R.string.dialog_manual_connect_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = inputConnectPort,
+                        onValueChange = { if (it.length <= 5 && it.all { c -> c.isDigit() }) inputConnectPort = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.label_connect_port)) },
+                        placeholder = { Text("Ej: 39541") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = inputConnectPort.length in 4..5,
+                    onClick = {
+                        val portInt = inputConnectPort.toIntOrNull()
+                        if (portInt != null) {
+                            manualConnectPort = portInt
+                        }
+                        showManualConnectDialog = false
+                    }
+                ) {
+                    Text(text = stringResource(R.string.btn_accept))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showManualConnectDialog = false }) {
+                    Text(text = stringResource(R.string.btn_cancel))
+                }
+            }
+        )
+    }
+
+    if (dialogPairingResultText != null) {
+        AlertDialog(
+            onDismissRequest = { dialogPairingResultText = null },
+            title = { Text(text = stringResource(R.string.title_manual_pairing)) },
+            text = { Text(text = dialogPairingResultText!!) },
+            confirmButton = {
+                TextButton(onClick = { dialogPairingResultText = null }) {
+                    Text(text = stringResource(R.string.btn_accept))
+                }
+            }
+        )
     }
 }
 
@@ -303,7 +666,6 @@ fun BackupCatalogScreen(
     var appSeleccionadaParaOpciones by remember { mutableStateOf<AppInstalada?>(null) }
     var lamSeleccionadoParaOpciones by remember { mutableStateOf<Pair<Uri, ManifestLam>?>(null) }
 
-    // Estados para operaciones en segundo plano (Backup y Restore)
     var operacionEnProceso by remember { mutableStateOf<String?>(null) }
     var tituloDialogoProgreso by remember { mutableStateOf("") }
     var progresoOperacion by remember { mutableFloatStateOf(0f) }
@@ -335,7 +697,6 @@ fun BackupCatalogScreen(
         }
     }
 
-    // Ejecuta Backup (Solo APK o Contenedor Unificado .lam)
     fun ejecutarBackup(app: AppInstalada, paqueteCompletoLam: Boolean) {
         appSeleccionadaParaOpciones = null
         operacionEnProceso = app.nombreVisible
@@ -406,7 +767,6 @@ fun BackupCatalogScreen(
         }
     }
 
-    // Ejecución específica de restauración de paquetes .lam
     fun ejecutarRestauracionLam(uri: Uri, soloApk: Boolean) {
         val nombreArchivo = AdbRestoreManager.resolverNombreArchivo(context, uri)
 
@@ -463,7 +823,6 @@ fun BackupCatalogScreen(
         }
     }
 
-    // Orquestador de Restauración (.lam, .tar.gz, .apk, .apks)
     fun ejecutarRestauracion(uri: Uri) {
         val nombreArchivo = AdbRestoreManager.resolverNombreArchivo(context, uri)
 
@@ -483,21 +842,17 @@ fun BackupCatalogScreen(
                 return@launch
             }
 
-            // Caso 1: Contenedor Unificado .lam
             if (nombreArchivo.endsWith(".lam", ignoreCase = true)) {
                 val manifest = withContext(Dispatchers.IO) {
                     AdbRestoreManager.leerManifestDeLam(context, uri)
                 }
 
                 if (manifest != null && manifest.hasPrivateData) {
-                    // Si contiene datos privados, abrir selector para elegir si restaurar datos o solo APK
                     lamSeleccionadoParaOpciones = Pair(uri, manifest)
                 } else {
                     ejecutarRestauracionLam(uri, soloApk = true)
                 }
-            }
-            // Caso 2: Datos Privados individuales (.tar.gz)
-            else if (nombreArchivo.endsWith(".tar.gz", ignoreCase = true) || nombreArchivo.endsWith(".tgz", ignoreCase = true)) {
+            } else if (nombreArchivo.endsWith(".tar.gz", ignoreCase = true) || nombreArchivo.endsWith(".tgz", ignoreCase = true)) {
                 tituloDialogoProgreso = context.getString(R.string.restore_dialog_title)
                 operacionEnProceso = nombreArchivo
                 progresoOperacion = 0f
@@ -530,9 +885,7 @@ fun BackupCatalogScreen(
                         context.getString(R.string.restore_status_failed, resultado.motivo)
                     }
                 }
-            }
-            // Caso 3: Binarios individuales (.apk / .apks / .xapk / .zip)
-            else if (nombreArchivo.endsWith(".apk", ignoreCase = true) ||
+            } else if (nombreArchivo.endsWith(".apk", ignoreCase = true) ||
                      nombreArchivo.endsWith(".apks", ignoreCase = true) ||
                      nombreArchivo.endsWith(".xapk", ignoreCase = true) ||
                      nombreArchivo.endsWith(".zip", ignoreCase = true)) {
@@ -593,7 +946,6 @@ fun BackupCatalogScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Selector principal de restauración de copias
         Button(
             modifier = Modifier.fillMaxWidth(),
             onClick = {
@@ -683,7 +1035,6 @@ fun BackupCatalogScreen(
         }
     }
 
-    // Diálogo modal exclusivo para Apps en modo depuración (ofrece APK o Contenedor Completo .lam)
     if (appSeleccionadaParaOpciones != null) {
         val app = appSeleccionadaParaOpciones!!
         AlertDialog(
@@ -700,7 +1051,6 @@ fun BackupCatalogScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Opción A: Copia de APK / APKS
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -719,7 +1069,6 @@ fun BackupCatalogScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Opción B: Copia Completa (APK + Datos Privados en .lam)
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -749,7 +1098,6 @@ fun BackupCatalogScreen(
         )
     }
 
-    // Diálogo modal al restaurar un archivo .lam que incluye datos privados
     if (lamSeleccionadoParaOpciones != null) {
         val (uri, manifest) = lamSeleccionadoParaOpciones!!
         AlertDialog(
@@ -766,7 +1114,6 @@ fun BackupCatalogScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Opción A: Instalar solo APK
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -789,7 +1136,6 @@ fun BackupCatalogScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Opción B: Instalar APK y Restaurar Datos
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -820,7 +1166,6 @@ fun BackupCatalogScreen(
         )
     }
 
-    // Diálogo de progreso en tiempo real (Backup / Restore / Instalación)
     if (operacionEnProceso != null) {
         AlertDialog(
             onDismissRequest = {},
@@ -841,7 +1186,6 @@ fun BackupCatalogScreen(
         )
     }
 
-    // Diálogo informativo del resultado final
     if (dialogoResultadoTexto != null) {
         AlertDialog(
             onDismissRequest = { dialogoResultadoTexto = null },
@@ -856,9 +1200,6 @@ fun BackupCatalogScreen(
     }
 }
 
-/**
- * Fila visual de cada aplicación en el catálogo.
- */
 @Composable
 fun ItemAppCatalogo(
     app: AppInstalada,
@@ -958,17 +1299,13 @@ fun ItemAppCatalogo(
     }
 }
 
-/**
- * Pestaña 1: Pantalla del Instalador.
- */
 @Composable
 fun InstallerScreen(
     adbManager: AdbConnectionManager,
     connectPort: Int?,
-    pairingPort: Int?,
     initialApkUri: Uri?,
     onOpenSettings: () -> Unit,
-    onShowNotification: (Int) -> Unit
+    onShowPairingDialog: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -1049,21 +1386,13 @@ fun InstallerScreen(
         showLamRestoreDialog = false
         isInstalling = true
         installProgress = 0f
-        installStatusMessage = "Localizando puerto ADB..."
+        installStatusMessage = "Conectando a ADB..."
 
         coroutineScope.launch {
-            var puerto = connectPort
-            if (puerto == null) {
-                for (i in 1..15) {
-                    delay(200)
-                    puerto = connectPort
-                    if (puerto != null) break
-                }
-            }
-
+            val puerto = connectPort
             if (puerto == null) {
                 isInstalling = false
-                installStatusMessage = "Error: No se detecta el puerto de depuración Wi-Fi. Actívalo en Ajustes."
+                installStatusMessage = "Error: No se detecta el puerto ADB. Introduce el puerto o usa Sincronizar."
                 return@launch
             }
 
@@ -1084,7 +1413,7 @@ fun InstallerScreen(
             installStatusMessage = when (result) {
                 is RestoreResult.Success -> {
                     if (soloApk) "¡Aplicación instalada con éxito!"
-                    else "¡Restauración completa finalizada con éxito!"
+                    else "¡Restauración de app y datos finalizada!"
                 }
                 is RestoreResult.Failure -> "Error: ${result.motivo}"
             }
@@ -1107,36 +1436,6 @@ fun InstallerScreen(
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 4.dp)
         )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val estadoPuerto = if (connectPort != null) {
-                stringResource(id = R.string.mdns_service_connect_found, connectPort)
-            } else {
-                stringResource(id = R.string.mdns_service_not_found)
-            }
-            Text(
-                text = estadoPuerto,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (connectPort != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            OutlinedButton(onClick = onOpenSettings) {
-                Text(text = stringResource(R.string.btn_open_dev_settings))
-            }
-        }
-
-        if (pairingPort != null) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(onClick = { pairingPort?.let { onShowNotification(it) } }) {
-                Text(text = stringResource(R.string.btn_show_pairing_notification))
-            }
-        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -1266,7 +1565,6 @@ fun InstallerScreen(
             onClick = {
                 val uri = currentUri ?: return@Button
 
-                // Si es un paquete .lam con datos privados, consultar al usuario si desea inyectar datos o solo instalar APK
                 if (manifestLam != null && manifestLam!!.hasPrivateData) {
                     showLamRestoreDialog = true
                     return@Button
@@ -1283,18 +1581,10 @@ fun InstallerScreen(
                 installStatusMessage = "Localizando puerto ADB..."
 
                 coroutineScope.launch {
-                    var puerto = puertoActivo
-                    if (puerto == null) {
-                        for (i in 1..15) {
-                            delay(200)
-                            puerto = connectPort
-                            if (puerto != null) break
-                        }
-                    }
-
+                    val puerto = puertoActivo
                     if (puerto == null) {
                         isInstalling = false
-                        installStatusMessage = "Error: No se detecta el puerto de depuración Wi-Fi. Actívalo en Ajustes."
+                        installStatusMessage = "Error: No se detecta el puerto ADB. Introduce el puerto o usa Sincronizar."
                         return@launch
                     }
 
@@ -1345,7 +1635,6 @@ fun InstallerScreen(
         }
     }
 
-    // Diálogo en el instalador si se abre un .lam con datos privados
     if (showLamRestoreDialog && manifestLam != null && currentUri != null) {
         val uri = currentUri!!
         val manifest = manifestLam!!
