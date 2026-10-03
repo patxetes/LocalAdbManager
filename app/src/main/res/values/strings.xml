@@ -7,6 +7,7 @@
     <string name="title_crypto_ok">Hito 1.1: Criptografía Lista</string>
     <string name="title_mdns_search">Hito 1.2: Escáner mDNS</string>
     <string name="title_pairing">Hito 1.3: Emparejamiento Local</string>
+    <string name="title_shell_exec">Hito 1.4: Consola Shell ADB</string>
 
     <!-- Estados mDNS -->
     <string name="mdns_status_idle">Escáner inactivo.</string>
@@ -15,11 +16,20 @@
     <string name="mdns_service_pairing_found">Puerto de Emparejamiento: %1$d</string>
     <string name="mdns_service_not_found">No se detecta depuración inalámbrica. Actívala en Ajustes.</string>
 
+    <!-- Estados de Conexión ADB -->
+    <string name="adb_status_disconnected">Estado: Desconectado</string>
+    <string name="adb_status_connected">Estado: Conectado a ADB local (127.0.0.1:%1$d)</string>
+    <string name="adb_status_connecting">Conectando con el demonio ADB…</string>
+    <string name="adb_connection_failed">Error al conectar: %1$s</string>
+
     <!-- Botones de la UI -->
     <string name="btn_start_scan">Iniciar Escaneo mDNS</string>
     <string name="btn_stop_scan">Detener Escaneo</string>
     <string name="btn_open_dev_settings">Abrir Ajustes de Desarrollador</string>
     <string name="btn_show_pairing_notification">Mostrar Notificación de Emparejamiento</string>
+    <string name="btn_connect_adb">Conectar a ADB</string>
+    <string name="btn_disconnect_adb">Desconectar</string>
+    <string name="btn_run_id_cmd">Ejecutar comando \"id\"</string>
 
     <!-- Textos de Notificación Interactiva -->
     <string name="notification_channel_name">Canal de Emparejamiento ADB</string>
@@ -30,4 +40,8 @@
     <string name="notification_action_send">Emparejar</string>
     <string name="notification_pairing_success">¡Dispositivo emparejado con éxito!</string>
     <string name="notification_pairing_failed">Fallo en el emparejamiento: %1$s</string>
+
+    <!-- Consola de Salida Shell -->
+    <string name="shell_output_placeholder">Salida de la consola shell aparecerá aquí…</string>
+    <string name="shell_executing">Ejecutando comando…</string>
 </resources>

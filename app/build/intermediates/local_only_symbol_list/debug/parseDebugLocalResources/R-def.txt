@@ -1,7 +1,14 @@
 R_DEF: Internal format may change without notice
 local
+string adb_connection_failed
+string adb_status_connected
+string adb_status_connecting
+string adb_status_disconnected
 string app_name
+string btn_connect_adb
+string btn_disconnect_adb
 string btn_open_dev_settings
+string btn_run_id_cmd
 string btn_show_pairing_notification
 string btn_start_scan
 string btn_stop_scan
@@ -18,6 +25,9 @@ string notification_pairing_failed
 string notification_pairing_success
 string notification_text
 string notification_title
+string shell_executing
+string shell_output_placeholder
 string title_crypto_ok
 string title_mdns_search
 string title_pairing
+string title_shell_exec
