@@ -301,6 +301,7 @@ fun BackupCatalogScreen(
     var listaApps by remember { mutableStateOf<List<AppInstalada>>(emptyList()) }
 
     var appSeleccionadaParaOpciones by remember { mutableStateOf<AppInstalada?>(null) }
+    var lamSeleccionadoParaOpciones by remember { mutableStateOf<Pair<Uri, ManifestLam>?>(null) }
 
     // Estados para operaciones en segundo plano (Backup y Restore)
     var operacionEnProceso by remember { mutableStateOf<String?>(null) }
@@ -405,6 +406,63 @@ fun BackupCatalogScreen(
         }
     }
 
+    // Ejecución específica de restauración de paquetes .lam
+    fun ejecutarRestauracionLam(uri: Uri, soloApk: Boolean) {
+        val nombreArchivo = AdbRestoreManager.resolverNombreArchivo(context, uri)
+
+        coroutineScope.launch {
+            var puerto = connectPort
+            if (puerto == null) {
+                mdnsManager.startDiscovery(mdnsCallback)
+                for (i in 1..15) {
+                    delay(200)
+                    puerto = connectPort
+                    if (puerto != null) break
+                }
+            }
+
+            if (puerto == null) {
+                dialogoResultadoTexto = context.getString(R.string.mdns_service_not_found)
+                return@launch
+            }
+
+            tituloDialogoProgreso = context.getString(R.string.restore_dialog_title)
+            operacionEnProceso = nombreArchivo
+            progresoOperacion = 0f
+            estadoOperacionTexto = context.getString(R.string.restore_status_inspecting_lam)
+
+            val resultado = withContext(Dispatchers.IO) {
+                AdbRestoreManager.restaurarPaqueteLam(
+                    context = context,
+                    adbManager = adbManager,
+                    targetPort = puerto,
+                    uri = uri,
+                    soloApk = soloApk
+                ) { percent, status ->
+                    progresoOperacion = percent / 100f
+                    estadoOperacionTexto = status
+                }
+            }
+
+            operacionEnProceso = null
+            dialogoResultadoTexto = when (resultado) {
+                is RestoreResult.Success -> {
+                    val manifest = AdbRestoreManager.leerManifestDeLam(context, uri)
+                    val appName = manifest?.appName ?: "Aplicación"
+                    if (soloApk) {
+                        context.getString(R.string.restore_status_apk_only_success, appName, resultado.paqueteId)
+                    } else {
+                        context.getString(R.string.restore_status_lam_success, appName, resultado.paqueteId)
+                    }
+                }
+                is RestoreResult.Failure -> {
+                    context.getString(R.string.restore_status_failed, resultado.motivo)
+                }
+            }
+            recargarCatalogo()
+        }
+    }
+
     // Orquestador de Restauración (.lam, .tar.gz, .apk, .apks)
     fun ejecutarRestauracion(uri: Uri) {
         val nombreArchivo = AdbRestoreManager.resolverNombreArchivo(context, uri)
@@ -425,37 +483,18 @@ fun BackupCatalogScreen(
                 return@launch
             }
 
-            // Caso 1: Contenedor Unificado .lam (Paso 1: Instalar APKs -> Paso 2: Inyectar Datos)
+            // Caso 1: Contenedor Unificado .lam
             if (nombreArchivo.endsWith(".lam", ignoreCase = true)) {
-                tituloDialogoProgreso = context.getString(R.string.restore_dialog_title)
-                operacionEnProceso = nombreArchivo
-                progresoOperacion = 0f
-                estadoOperacionTexto = context.getString(R.string.restore_status_inspecting_lam)
-
-                val resultado = withContext(Dispatchers.IO) {
-                    AdbRestoreManager.restaurarPaqueteLam(
-                        context = context,
-                        adbManager = adbManager,
-                        targetPort = puerto,
-                        uri = uri
-                    ) { percent, status ->
-                        progresoOperacion = percent / 100f
-                        estadoOperacionTexto = status
-                    }
+                val manifest = withContext(Dispatchers.IO) {
+                    AdbRestoreManager.leerManifestDeLam(context, uri)
                 }
 
-                operacionEnProceso = null
-                dialogoResultadoTexto = when (resultado) {
-                    is RestoreResult.Success -> {
-                        val manifest = AdbRestoreManager.leerManifestDeLam(context, uri)
-                        val appName = manifest?.appName ?: "Aplicación"
-                        context.getString(R.string.restore_status_lam_success, appName, resultado.paqueteId)
-                    }
-                    is RestoreResult.Failure -> {
-                        context.getString(R.string.restore_status_failed, resultado.motivo)
-                    }
+                if (manifest != null && manifest.hasPrivateData) {
+                    // Si contiene datos privados, abrir selector para elegir si restaurar datos o solo APK
+                    lamSeleccionadoParaOpciones = Pair(uri, manifest)
+                } else {
+                    ejecutarRestauracionLam(uri, soloApk = true)
                 }
-                recargarCatalogo()
             }
             // Caso 2: Datos Privados individuales (.tar.gz)
             else if (nombreArchivo.endsWith(".tar.gz", ignoreCase = true) || nombreArchivo.endsWith(".tgz", ignoreCase = true)) {
@@ -710,6 +749,77 @@ fun BackupCatalogScreen(
         )
     }
 
+    // Diálogo modal al restaurar un archivo .lam que incluye datos privados
+    if (lamSeleccionadoParaOpciones != null) {
+        val (uri, manifest) = lamSeleccionadoParaOpciones!!
+        AlertDialog(
+            onDismissRequest = { lamSeleccionadoParaOpciones = null },
+            title = { Text(text = stringResource(R.string.title_restore_options)) },
+            text = {
+                Column {
+                    Text(text = manifest.appName, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        text = manifest.packageName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Opción A: Instalar solo APK
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val targetUri = uri
+                                lamSeleccionadoParaOpciones = null
+                                ejecutarRestauracionLam(targetUri, soloApk = true)
+                            },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = stringResource(R.string.restore_opt_only_apk), fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = stringResource(R.string.restore_opt_desc_only_apk),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Opción B: Instalar APK y Restaurar Datos
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val targetUri = uri
+                                lamSeleccionadoParaOpciones = null
+                                ejecutarRestauracionLam(targetUri, soloApk = false)
+                            },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = stringResource(R.string.restore_opt_full), fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = stringResource(R.string.restore_opt_desc_full),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { lamSeleccionadoParaOpciones = null }) {
+                    Text(text = stringResource(R.string.btn_cancel))
+                }
+            }
+        )
+    }
+
     // Diálogo de progreso en tiempo real (Backup / Restore / Instalación)
     if (operacionEnProceso != null) {
         AlertDialog(
@@ -867,6 +977,7 @@ fun InstallerScreen(
     var parsedApk by remember { mutableStateOf<PackageDetails?>(null) }
     var bundleAnalysis by remember { mutableStateOf<BundleAnalysisResult?>(null) }
     var manifestLam by remember { mutableStateOf<ManifestLam?>(null) }
+    var showLamRestoreDialog by remember { mutableStateOf(false) }
     var parsingError by remember { mutableStateOf<String?>(null) }
 
     var isInstalling by remember { mutableStateOf(false) }
@@ -883,7 +994,6 @@ fun InstallerScreen(
             val totalBytes = resolveFileSize(context, uri)
             val nombre = AdbRestoreManager.resolverNombreArchivo(context, uri)
 
-            // Si es un contenedor unificado .lam
             if (nombre.endsWith(".lam", ignoreCase = true)) {
                 val manifest = withContext(Dispatchers.IO) {
                     AdbRestoreManager.leerManifestDeLam(context, uri)
@@ -933,6 +1043,52 @@ fun InstallerScreen(
             processSelectedUri(initialApkUri)
         }
         onDispose { }
+    }
+
+    fun iniciarInstalacionLam(uri: Uri, soloApk: Boolean) {
+        showLamRestoreDialog = false
+        isInstalling = true
+        installProgress = 0f
+        installStatusMessage = "Localizando puerto ADB..."
+
+        coroutineScope.launch {
+            var puerto = connectPort
+            if (puerto == null) {
+                for (i in 1..15) {
+                    delay(200)
+                    puerto = connectPort
+                    if (puerto != null) break
+                }
+            }
+
+            if (puerto == null) {
+                isInstalling = false
+                installStatusMessage = "Error: No se detecta el puerto de depuración Wi-Fi. Actívalo en Ajustes."
+                return@launch
+            }
+
+            val result = withContext(Dispatchers.IO) {
+                AdbRestoreManager.restaurarPaqueteLam(
+                    context = context,
+                    adbManager = adbManager,
+                    targetPort = puerto,
+                    uri = uri,
+                    soloApk = soloApk
+                ) { percent, status ->
+                    installProgress = percent / 100f
+                    installStatusMessage = status
+                }
+            }
+
+            isInstalling = false
+            installStatusMessage = when (result) {
+                is RestoreResult.Success -> {
+                    if (soloApk) "¡Aplicación instalada con éxito!"
+                    else "¡Restauración completa finalizada con éxito!"
+                }
+                is RestoreResult.Failure -> "Error: ${result.motivo}"
+            }
+        }
     }
 
     Column(
@@ -1110,6 +1266,18 @@ fun InstallerScreen(
             onClick = {
                 val uri = currentUri ?: return@Button
 
+                // Si es un paquete .lam con datos privados, consultar al usuario si desea inyectar datos o solo instalar APK
+                if (manifestLam != null && manifestLam!!.hasPrivateData) {
+                    showLamRestoreDialog = true
+                    return@Button
+                }
+
+                if (manifestLam != null) {
+                    iniciarInstalacionLam(uri, soloApk = true)
+                    return@Button
+                }
+
+                val analysis = bundleAnalysis ?: return@Button
                 isInstalling = true
                 installProgress = 0f
                 installStatusMessage = "Localizando puerto ADB..."
@@ -1130,45 +1298,23 @@ fun InstallerScreen(
                         return@launch
                     }
 
-                    // Si es un paquete .lam
-                    if (manifestLam != null) {
-                        val result = withContext(Dispatchers.IO) {
-                            AdbRestoreManager.restaurarPaqueteLam(
-                                context = context,
-                                adbManager = adbManager,
-                                targetPort = puerto,
-                                uri = uri
-                            ) { percent, status ->
-                                installProgress = percent / 100f
-                                installStatusMessage = status
-                            }
+                    val result = withContext(Dispatchers.IO) {
+                        AdbPackageInstaller.install(
+                            context = context,
+                            adbManager = adbManager,
+                            targetPort = puerto,
+                            apkUri = uri,
+                            bundleAnalysis = analysis
+                        ) { percent, status ->
+                            installProgress = percent / 100f
+                            installStatusMessage = status
                         }
+                    }
 
-                        isInstalling = false
-                        installStatusMessage = when (result) {
-                            is RestoreResult.Success -> "¡Restauración completa finalizada con éxito!"
-                            is RestoreResult.Failure -> "Error: ${result.motivo}"
-                        }
-                    } else {
-                        val analysis = bundleAnalysis ?: return@launch
-                        val result = withContext(Dispatchers.IO) {
-                            AdbPackageInstaller.install(
-                                context = context,
-                                adbManager = adbManager,
-                                targetPort = puerto,
-                                apkUri = uri,
-                                bundleAnalysis = analysis
-                            ) { percent, status ->
-                                installProgress = percent / 100f
-                                installStatusMessage = status
-                            }
-                        }
-
-                        isInstalling = false
-                        installStatusMessage = when (result) {
-                            is InstallResult.Success -> "¡Instalación completada con éxito!"
-                            is InstallResult.Failure -> "Error: ${result.reason}"
-                        }
+                    isInstalling = false
+                    installStatusMessage = when (result) {
+                        is InstallResult.Success -> "¡Instalación completada con éxito!"
+                        is InstallResult.Failure -> "Error: ${result.reason}"
                     }
                 }
             }
@@ -1197,6 +1343,68 @@ fun InstallerScreen(
                 )
             }
         }
+    }
+
+    // Diálogo en el instalador si se abre un .lam con datos privados
+    if (showLamRestoreDialog && manifestLam != null && currentUri != null) {
+        val uri = currentUri!!
+        val manifest = manifestLam!!
+        AlertDialog(
+            onDismissRequest = { showLamRestoreDialog = false },
+            title = { Text(text = stringResource(R.string.title_restore_options)) },
+            text = {
+                Column {
+                    Text(text = manifest.appName, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        text = manifest.packageName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { iniciarInstalacionLam(uri, soloApk = true) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = stringResource(R.string.restore_opt_only_apk), fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = stringResource(R.string.restore_opt_desc_only_apk),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { iniciarInstalacionLam(uri, soloApk = false) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = stringResource(R.string.restore_opt_full), fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = stringResource(R.string.restore_opt_desc_full),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showLamRestoreDialog = false }) {
+                    Text(text = stringResource(R.string.btn_cancel))
+                }
+            }
+        )
     }
 }
 

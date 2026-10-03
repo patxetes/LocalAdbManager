@@ -16,6 +16,7 @@
     <string name="title_backup_catalog">Catálogo de Aplicaciones</string>
     <string name="title_backup_options">Opciones de Respaldo</string>
     <string name="title_restore">Restaurar Copia de Seguridad</string>
+    <string name="title_restore_options">Opciones de Restauración (.lam)</string>
 
     <!-- Estados mDNS -->
     <string name="mdns_status_idle">Escáner inactivo.</string>
@@ -52,6 +53,12 @@
     <string name="backup_opt_desc_apk">Exporta los archivos binarios necesarios para reinstalar la app.</string>
     <string name="backup_opt_full_lam">Copia APK y datos de usuario (.lam)</string>
     <string name="backup_opt_desc_full_lam">Empaqueta el APK y sus bases de datos/preferencias en un único contenedor .lam.</string>
+
+    <!-- Opciones del Diálogo de Restauración (.lam) -->
+    <string name="restore_opt_only_apk">Instalar solo APK / Bundle</string>
+    <string name="restore_opt_desc_only_apk">Reinstala la aplicación sin modificar ni inyectar datos de usuario.</string>
+    <string name="restore_opt_full">Instalar APK y restaurar datos</string>
+    <string name="restore_opt_desc_full">Instala la aplicación y restaura sus bases de datos SQLite y preferencias.</string>
 
     <!-- Notificación Interactiva -->
     <string name="notification_channel_name">Canal de Emparejamiento ADB</string>
@@ -117,6 +124,7 @@
     <string name="restore_status_restarting">Reiniciando proceso de la aplicación…</string>
     <string name="restore_status_success">¡Restauración completada con éxito!\n\nPaquete: %1$s\nDatos inyectados: %2$s</string>
     <string name="restore_status_lam_success">¡Restauración completa finalizada!\n\nAplicación: %1$s\nPaquete: %2$s\nEstado: Binarios instalados y datos privados inyectados con éxito.</string>
+    <string name="restore_status_apk_only_success">¡Aplicación instalada con éxito!\n\nAplicación: %1$s\nPaquete: %2$s\nEstado: Binarios instalados (sin inyección de datos).</string>
     <string name="restore_status_failed">Error al restaurar: %1$s</string>
     <string name="restore_err_pkg_not_installed">La aplicación %1$s no está instalada en el dispositivo. Restaura primero el APK.</string>
     <string name="restore_err_not_debuggable">La aplicación instalada (%1$s) no está en modo depuración, impidiendo la inyección con run-as.</string>

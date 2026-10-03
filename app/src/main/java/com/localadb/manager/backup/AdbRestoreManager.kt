@@ -78,13 +78,15 @@ object AdbRestoreManager {
     }
 
     /**
-     * Orquestador de restauración completa para contenedores .lam (Paso 1: APKs -> Paso 2: Datos run-as).
+     * Orquestador de restauración para contenedores .lam.
+     * Permite instalar solo el APK o realizar la restauración completa (APK + Datos privados).
      */
     fun restaurarPaqueteLam(
         context: Context,
         adbManager: AdbConnectionManager,
         targetPort: Int,
         uri: Uri,
+        soloApk: Boolean = false,
         onProgreso: (porcentaje: Int, estado: String) -> Unit
     ): RestoreResult {
 
@@ -96,12 +98,18 @@ object AdbRestoreManager {
         val nombreApp = manifest.appName
 
         // Protección: evitar auto-restaurarse a sí misma para que am force-stop no mate este proceso
-        if (paqueteId == context.packageName) {
+        if (paqueteId == context.packageName && !soloApk) {
             return RestoreResult.Failure(context.getString(R.string.restore_err_self_restore))
         }
 
         // 1. Paso 1/2: Instalar los binarios APK contenidos en apks/ mediante streaming ADB
-        onProgreso(15, context.getString(R.string.restore_status_installing_apk, nombreApp))
+        val etiquetaInstalacion = if (soloApk) {
+            context.getString(R.string.install_status_creating_session)
+        } else {
+            context.getString(R.string.restore_status_installing_apk, nombreApp)
+        }
+        onProgreso(15, etiquetaInstalacion)
+
         val totalBytes = resolverTamanoArchivo(context, uri)
         val analysis = BundleSplitFilter.inspectAndFilter(context, uri, totalBytes)
 
@@ -116,18 +124,19 @@ object AdbRestoreManager {
             apkUri = uri,
             bundleAnalysis = analysis
         ) { pct, status ->
-            onProgreso(15 + (pct * 35 / 100), "Paso 1/2: $status")
+            val pesoProgreso = if (soloApk || !manifest.hasPrivateData) 85 else 40
+            onProgreso(15 + (pct * pesoProgreso / 100), status)
         }
 
         if (resultadoInstall is InstallResult.Failure) {
             return RestoreResult.Failure("Fallo al instalar binarios: ${resultadoInstall.reason}")
         }
 
-        // 2. Paso 2/2: Inyectar datos privados si están incluidos en el .lam
-        if (manifest.hasPrivateData) {
-            onProgreso(55, context.getString(R.string.restore_status_injecting, paqueteId))
+        // 2. Paso 2/2: Inyectar datos privados si están incluidos en el .lam y no se seleccionó 'soloApk'
+        if (!soloApk && manifest.hasPrivateData) {
+            onProgreso(60, context.getString(R.string.restore_status_injecting, paqueteId))
             val resDatos = inyectarDatosPrivadosDesdeLam(context, adbManager, targetPort, uri, paqueteId) { pct, status ->
-                onProgreso(55 + (pct * 40 / 100), "Paso 2/2: $status")
+                onProgreso(60 + (pct * 35 / 100), "Paso 2/2: $status")
             }
 
             if (resDatos is RestoreResult.Failure) {
@@ -135,7 +144,7 @@ object AdbRestoreManager {
             }
         }
 
-        onProgreso(100, "¡Restauración completa finalizada!")
+        onProgreso(100, "¡Restauración finalizada con éxito!")
         return RestoreResult.Success(paqueteId, totalBytes)
     }
 
@@ -152,7 +161,6 @@ object AdbRestoreManager {
     ): RestoreResult {
         val pm = context.packageManager
 
-        // Verificar que la app recién instalada es depurable
         val appInfo: ApplicationInfo = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 pm.getApplicationInfo(paqueteId, PackageManager.ApplicationInfoFlags.of(0))
@@ -208,7 +216,6 @@ object AdbRestoreManager {
             canalOut.close()
             canal.close()
 
-            // Detener el proceso para que la app objetivo recargue su estado limpio
             onProgreso(95, context.getString(R.string.restore_status_restarting))
             adbManager.executeCommand("am force-stop $paqueteId")
 

@@ -76,6 +76,11 @@ string restore_err_not_debuggable
 string restore_err_pkg_not_installed
 string restore_err_self_restore
 string restore_err_unrecognized_file
+string restore_opt_desc_full
+string restore_opt_desc_only_apk
+string restore_opt_full
+string restore_opt_only_apk
+string restore_status_apk_only_success
 string restore_status_failed
 string restore_status_injecting
 string restore_status_inspecting_lam
@@ -95,4 +100,5 @@ string title_installer
 string title_mdns_search
 string title_pairing
 string title_restore
+string title_restore_options
 string title_shell_exec
