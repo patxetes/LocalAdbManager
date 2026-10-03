@@ -79,9 +79,12 @@ import com.localadb.manager.adb.AdbConnectionManager
 import com.localadb.manager.adb.AdbMdnsManager
 import com.localadb.manager.adb.PairingNotificationReceiver
 import com.localadb.manager.backup.AdbBackupManager
+import com.localadb.manager.backup.AdbRestoreManager
 import com.localadb.manager.backup.AppInstalada
 import com.localadb.manager.backup.BackupResult
+import com.localadb.manager.backup.ManifestLam
 import com.localadb.manager.backup.PackageCatalogManager
+import com.localadb.manager.backup.RestoreResult
 import com.localadb.manager.installer.AdbPackageInstaller
 import com.localadb.manager.installer.ApkParser
 import com.localadb.manager.installer.BundleAnalysisResult
@@ -281,7 +284,7 @@ fun AppNavegacionPrincipal(
 }
 
 /**
- * Pestaña 2: Catálogo de Aplicaciones y Acciones de Copia de Seguridad.
+ * Pestaña 2: Catálogo de Aplicaciones, Exportación y Motor de Restauración.
  */
 @Composable
 fun BackupCatalogScreen(
@@ -298,9 +301,12 @@ fun BackupCatalogScreen(
     var listaApps by remember { mutableStateOf<List<AppInstalada>>(emptyList()) }
 
     var appSeleccionadaParaOpciones by remember { mutableStateOf<AppInstalada?>(null) }
-    var appEnProceso by remember { mutableStateOf<AppInstalada?>(null) }
-    var progresoBackup by remember { mutableFloatStateOf(0f) }
-    var estadoBackupTexto by remember { mutableStateOf("") }
+
+    // Estados para operaciones en segundo plano (Backup y Restore)
+    var operacionEnProceso by remember { mutableStateOf<String?>(null) }
+    var tituloDialogoProgreso by remember { mutableStateOf("") }
+    var progresoOperacion by remember { mutableFloatStateOf(0f) }
+    var estadoOperacionTexto by remember { mutableStateOf("") }
     var dialogoResultadoTexto by remember { mutableStateOf<String?>(null) }
 
     fun recargarCatalogo() {
@@ -328,13 +334,14 @@ fun BackupCatalogScreen(
         }
     }
 
-    // Ejecuta la copia: solo APK/Bundle o datos privados con run-as
-    fun ejecutarCopia(app: AppInstalada, soloDatosPrivados: Boolean) {
+    // Ejecuta Backup (Solo APK o Contenedor Unificado .lam)
+    fun ejecutarBackup(app: AppInstalada, paqueteCompletoLam: Boolean) {
         appSeleccionadaParaOpciones = null
-        appEnProceso = app
-        progresoBackup = 0f
-        estadoBackupTexto = if (soloDatosPrivados) {
-            context.getString(R.string.backup_status_extracting_data, app.nombreVisible)
+        operacionEnProceso = app.nombreVisible
+        tituloDialogoProgreso = context.getString(R.string.backup_dialog_title)
+        progresoOperacion = 0f
+        estadoOperacionTexto = if (paqueteCompletoLam) {
+            context.getString(R.string.backup_status_creating_lam, app.nombreVisible)
         } else {
             context.getString(R.string.backup_status_extracting, app.nombreVisible)
         }
@@ -351,21 +358,21 @@ fun BackupCatalogScreen(
             }
 
             if (puerto == null) {
-                appEnProceso = null
+                operacionEnProceso = null
                 dialogoResultadoTexto = context.getString(R.string.mdns_service_not_found)
                 return@launch
             }
 
             val resultado = withContext(Dispatchers.IO) {
-                if (soloDatosPrivados) {
-                    AdbBackupManager.exportarDatosPrivados(
+                if (paqueteCompletoLam) {
+                    AdbBackupManager.exportarPaqueteCompletoLam(
                         context = context,
                         adbManager = adbManager,
                         targetPort = puerto,
                         app = app
                     ) { percent, status ->
-                        progresoBackup = percent / 100f
-                        estadoBackupTexto = status
+                        progresoOperacion = percent / 100f
+                        estadoOperacionTexto = status
                     }
                 } else {
                     AdbBackupManager.exportarApk(
@@ -374,13 +381,13 @@ fun BackupCatalogScreen(
                         targetPort = puerto,
                         app = app
                     ) { percent, status ->
-                        progresoBackup = percent / 100f
-                        estadoBackupTexto = status
+                        progresoOperacion = percent / 100f
+                        estadoOperacionTexto = status
                     }
                 }
             }
 
-            appEnProceso = null
+            operacionEnProceso = null
             dialogoResultadoTexto = when (resultado) {
                 is BackupResult.Success -> {
                     val mb = resultado.tamanoBytes / (1024.0 * 1024.0)
@@ -398,6 +405,142 @@ fun BackupCatalogScreen(
         }
     }
 
+    // Orquestador de Restauración (.lam, .tar.gz, .apk, .apks)
+    fun ejecutarRestauracion(uri: Uri) {
+        val nombreArchivo = AdbRestoreManager.resolverNombreArchivo(context, uri)
+
+        coroutineScope.launch {
+            var puerto = connectPort
+            if (puerto == null) {
+                mdnsManager.startDiscovery(mdnsCallback)
+                for (i in 1..15) {
+                    delay(200)
+                    puerto = connectPort
+                    if (puerto != null) break
+                }
+            }
+
+            if (puerto == null) {
+                dialogoResultadoTexto = context.getString(R.string.mdns_service_not_found)
+                return@launch
+            }
+
+            // Caso 1: Contenedor Unificado .lam (Paso 1: Instalar APKs -> Paso 2: Inyectar Datos)
+            if (nombreArchivo.endsWith(".lam", ignoreCase = true)) {
+                tituloDialogoProgreso = context.getString(R.string.restore_dialog_title)
+                operacionEnProceso = nombreArchivo
+                progresoOperacion = 0f
+                estadoOperacionTexto = context.getString(R.string.restore_status_inspecting_lam)
+
+                val resultado = withContext(Dispatchers.IO) {
+                    AdbRestoreManager.restaurarPaqueteLam(
+                        context = context,
+                        adbManager = adbManager,
+                        targetPort = puerto,
+                        uri = uri
+                    ) { percent, status ->
+                        progresoOperacion = percent / 100f
+                        estadoOperacionTexto = status
+                    }
+                }
+
+                operacionEnProceso = null
+                dialogoResultadoTexto = when (resultado) {
+                    is RestoreResult.Success -> {
+                        val manifest = AdbRestoreManager.leerManifestDeLam(context, uri)
+                        val appName = manifest?.appName ?: "Aplicación"
+                        context.getString(R.string.restore_status_lam_success, appName, resultado.paqueteId)
+                    }
+                    is RestoreResult.Failure -> {
+                        context.getString(R.string.restore_status_failed, resultado.motivo)
+                    }
+                }
+                recargarCatalogo()
+            }
+            // Caso 2: Datos Privados individuales (.tar.gz)
+            else if (nombreArchivo.endsWith(".tar.gz", ignoreCase = true) || nombreArchivo.endsWith(".tgz", ignoreCase = true)) {
+                tituloDialogoProgreso = context.getString(R.string.restore_dialog_title)
+                operacionEnProceso = nombreArchivo
+                progresoOperacion = 0f
+                estadoOperacionTexto = context.getString(R.string.restore_status_preparing, nombreArchivo)
+
+                val resultado = withContext(Dispatchers.IO) {
+                    AdbRestoreManager.restaurarDatosPrivados(
+                        context = context,
+                        adbManager = adbManager,
+                        targetPort = puerto,
+                        uri = uri
+                    ) { percent, status ->
+                        progresoOperacion = percent / 100f
+                        estadoOperacionTexto = status
+                    }
+                }
+
+                operacionEnProceso = null
+                dialogoResultadoTexto = when (resultado) {
+                    is RestoreResult.Success -> {
+                        val mb = resultado.tamanoBytes / (1024.0 * 1024.0)
+                        val tamanoFormateado = if (mb >= 1.0) {
+                            String.format("%.2f MB", mb)
+                        } else {
+                            String.format("%.2f KB", resultado.tamanoBytes / 1024.0)
+                        }
+                        context.getString(R.string.restore_status_success, resultado.paqueteId, tamanoFormateado)
+                    }
+                    is RestoreResult.Failure -> {
+                        context.getString(R.string.restore_status_failed, resultado.motivo)
+                    }
+                }
+            }
+            // Caso 3: Binarios individuales (.apk / .apks / .xapk / .zip)
+            else if (nombreArchivo.endsWith(".apk", ignoreCase = true) ||
+                     nombreArchivo.endsWith(".apks", ignoreCase = true) ||
+                     nombreArchivo.endsWith(".xapk", ignoreCase = true) ||
+                     nombreArchivo.endsWith(".zip", ignoreCase = true)) {
+
+                tituloDialogoProgreso = context.getString(R.string.title_installer)
+                operacionEnProceso = nombreArchivo
+                progresoOperacion = 0f
+                estadoOperacionTexto = context.getString(R.string.install_status_creating_session)
+
+                val totalBytes = resolveFileSize(context, uri)
+                val analysis = withContext(Dispatchers.IO) {
+                    BundleSplitFilter.inspectAndFilter(context, uri, totalBytes)
+                }
+
+                val resultado = withContext(Dispatchers.IO) {
+                    AdbPackageInstaller.install(
+                        context = context,
+                        adbManager = adbManager,
+                        targetPort = puerto,
+                        apkUri = uri,
+                        bundleAnalysis = analysis
+                    ) { percent, status ->
+                        progresoOperacion = percent / 100f
+                        estadoOperacionTexto = status
+                    }
+                }
+
+                operacionEnProceso = null
+                dialogoResultadoTexto = when (resultado) {
+                    is InstallResult.Success -> context.getString(R.string.install_status_success)
+                    is InstallResult.Failure -> context.getString(R.string.install_status_failed, resultado.reason)
+                }
+                recargarCatalogo()
+            } else {
+                dialogoResultadoTexto = context.getString(R.string.restore_err_unrecognized_file)
+            }
+        }
+    }
+
+    val restoreFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            ejecutarRestauracion(uri)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -408,6 +551,28 @@ fun BackupCatalogScreen(
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Selector principal de restauración de copias
+        Button(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                restoreFilePickerLauncher.launch(
+                    arrayOf(
+                        "application/vnd.android.package-archive",
+                        "application/gzip",
+                        "application/x-gzip",
+                        "application/x-tar",
+                        "application/zip",
+                        "application/octet-stream",
+                        "*/*"
+                    )
+                )
+            }
+        ) {
+            Text(text = stringResource(R.string.btn_restore_file))
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -470,8 +635,8 @@ fun BackupCatalogScreen(
                 items(appsFiltradas, key = { it.paqueteId }) { app ->
                     ItemAppCatalogo(
                         app = app,
-                        estaEnProgreso = appEnProceso != null,
-                        onCopiaDirectaApk = { ejecutarCopia(app, soloDatosPrivados = false) },
+                        estaEnProgreso = operacionEnProceso != null,
+                        onCopiaDirectaApk = { ejecutarBackup(app, paqueteCompletoLam = false) },
                         onAbrirOpciones = { appSeleccionadaParaOpciones = app }
                     )
                 }
@@ -479,7 +644,7 @@ fun BackupCatalogScreen(
         }
     }
 
-    // Diálogo modal exclusivo para Apps en modo depuración (ofrece APK o Datos con run-as)
+    // Diálogo modal exclusivo para Apps en modo depuración (ofrece APK o Contenedor Completo .lam)
     if (appSeleccionadaParaOpciones != null) {
         val app = appSeleccionadaParaOpciones!!
         AlertDialog(
@@ -500,7 +665,7 @@ fun BackupCatalogScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { ejecutarCopia(app, soloDatosPrivados = false) },
+                            .clickable { ejecutarBackup(app, paqueteCompletoLam = false) },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -515,21 +680,21 @@ fun BackupCatalogScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Opción B: Copia de Datos Privados (Bases de datos y SharedPreferences vía run-as)
+                    // Opción B: Copia Completa (APK + Datos Privados en .lam)
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { ejecutarCopia(app, soloDatosPrivados = true) },
+                            .clickable { ejecutarBackup(app, paqueteCompletoLam = true) },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(
-                                text = stringResource(R.string.backup_opt_private_data),
+                                text = stringResource(R.string.backup_opt_full_lam),
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = stringResource(R.string.backup_opt_desc_private_data),
+                                text = stringResource(R.string.backup_opt_desc_full_lam),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
@@ -545,21 +710,21 @@ fun BackupCatalogScreen(
         )
     }
 
-    // Diálogo de progreso en tiempo real
-    if (appEnProceso != null) {
+    // Diálogo de progreso en tiempo real (Backup / Restore / Instalación)
+    if (operacionEnProceso != null) {
         AlertDialog(
             onDismissRequest = {},
-            title = { Text(text = stringResource(R.string.backup_dialog_title)) },
+            title = { Text(text = tituloDialogoProgreso) },
             text = {
                 Column {
-                    Text(text = appEnProceso!!.nombreVisible, fontWeight = FontWeight.Bold)
+                    Text(text = operacionEnProceso!!, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(12.dp))
                     LinearProgressIndicator(
-                        progress = { progresoBackup },
+                        progress = { progresoOperacion },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = estadoBackupTexto, style = MaterialTheme.typography.bodySmall)
+                    Text(text = estadoOperacionTexto, style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {}
@@ -661,7 +826,6 @@ fun ItemAppCatalogo(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Apps estándar: botón directo "Copia APK" | Apps debug: botón "Backup" con selector modal
             val textoBoton = if (app.esDepurable) {
                 stringResource(R.string.btn_backup_action)
             } else {
@@ -702,6 +866,7 @@ fun InstallerScreen(
     var currentUri by remember { mutableStateOf(initialApkUri) }
     var parsedApk by remember { mutableStateOf<PackageDetails?>(null) }
     var bundleAnalysis by remember { mutableStateOf<BundleAnalysisResult?>(null) }
+    var manifestLam by remember { mutableStateOf<ManifestLam?>(null) }
     var parsingError by remember { mutableStateOf<String?>(null) }
 
     var isInstalling by remember { mutableStateOf(false) }
@@ -712,23 +877,45 @@ fun InstallerScreen(
         currentUri = uri
         installStatusMessage = null
         parsingError = null
+        manifestLam = null
 
         coroutineScope.launch {
             val totalBytes = resolveFileSize(context, uri)
+            val nombre = AdbRestoreManager.resolverNombreArchivo(context, uri)
 
-            val analysis = withContext(Dispatchers.IO) {
-                BundleSplitFilter.inspectAndFilter(context, uri, totalBytes)
-            }
-            bundleAnalysis = analysis
-
-            val details = withContext(Dispatchers.IO) {
-                ApkParser.extractDetails(context, uri)
-            }
-
-            if (details != null) {
-                parsedApk = details
+            // Si es un contenedor unificado .lam
+            if (nombre.endsWith(".lam", ignoreCase = true)) {
+                val manifest = withContext(Dispatchers.IO) {
+                    AdbRestoreManager.leerManifestDeLam(context, uri)
+                }
+                if (manifest != null) {
+                    manifestLam = manifest
+                    parsedApk = PackageDetails(
+                        displayName = manifest.appName,
+                        identifier = manifest.packageName,
+                        versionName = manifest.versionName,
+                        versionCode = manifest.versionCode,
+                        fileSizeBytes = totalBytes,
+                        appIcon = null
+                    )
+                } else {
+                    parsingError = context.getString(R.string.restore_err_invalid_lam)
+                }
             } else {
-                parsingError = "No se pudieron extraer los metadatos del paquete."
+                val analysis = withContext(Dispatchers.IO) {
+                    BundleSplitFilter.inspectAndFilter(context, uri, totalBytes)
+                }
+                bundleAnalysis = analysis
+
+                val details = withContext(Dispatchers.IO) {
+                    ApkParser.extractDetails(context, uri)
+                }
+
+                if (details != null) {
+                    parsedApk = details
+                } else {
+                    parsingError = "No se pudieron extraer los metadatos del paquete."
+                }
             }
         }
     }
@@ -871,7 +1058,14 @@ fun InstallerScreen(
                         style = MaterialTheme.typography.bodyMedium
                     )
 
-                    if (bundleAnalysis?.isBundle == true) {
+                    if (manifestLam != null) {
+                        Text(
+                            text = stringResource(R.string.apk_lam_detected),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    } else if (bundleAnalysis?.isBundle == true) {
                         val count = bundleAnalysis?.compatibleSplits?.size ?: 0
                         Text(
                             text = stringResource(R.string.apk_splits_detected, count),
@@ -912,10 +1106,9 @@ fun InstallerScreen(
         val puertoActivo = connectPort
         Button(
             modifier = Modifier.fillMaxWidth(),
-            enabled = bundleAnalysis != null && currentUri != null && !isInstalling,
+            enabled = (bundleAnalysis != null || manifestLam != null) && currentUri != null && !isInstalling,
             onClick = {
                 val uri = currentUri ?: return@Button
-                val analysis = bundleAnalysis ?: return@Button
 
                 isInstalling = true
                 installProgress = 0f
@@ -937,23 +1130,45 @@ fun InstallerScreen(
                         return@launch
                     }
 
-                    val result = withContext(Dispatchers.IO) {
-                        AdbPackageInstaller.install(
-                            context = context,
-                            adbManager = adbManager,
-                            targetPort = puerto,
-                            apkUri = uri,
-                            bundleAnalysis = analysis
-                        ) { percent, status ->
-                            installProgress = percent / 100f
-                            installStatusMessage = status
+                    // Si es un paquete .lam
+                    if (manifestLam != null) {
+                        val result = withContext(Dispatchers.IO) {
+                            AdbRestoreManager.restaurarPaqueteLam(
+                                context = context,
+                                adbManager = adbManager,
+                                targetPort = puerto,
+                                uri = uri
+                            ) { percent, status ->
+                                installProgress = percent / 100f
+                                installStatusMessage = status
+                            }
                         }
-                    }
 
-                    isInstalling = false
-                    installStatusMessage = when (result) {
-                        is InstallResult.Success -> "¡Instalación completada con éxito!"
-                        is InstallResult.Failure -> "Error: ${result.reason}"
+                        isInstalling = false
+                        installStatusMessage = when (result) {
+                            is RestoreResult.Success -> "¡Restauración completa finalizada con éxito!"
+                            is RestoreResult.Failure -> "Error: ${result.motivo}"
+                        }
+                    } else {
+                        val analysis = bundleAnalysis ?: return@launch
+                        val result = withContext(Dispatchers.IO) {
+                            AdbPackageInstaller.install(
+                                context = context,
+                                adbManager = adbManager,
+                                targetPort = puerto,
+                                apkUri = uri,
+                                bundleAnalysis = analysis
+                            ) { percent, status ->
+                                installProgress = percent / 100f
+                                installStatusMessage = status
+                            }
+                        }
+
+                        isInstalling = false
+                        installStatusMessage = when (result) {
+                            is InstallResult.Success -> "¡Instalación completada con éxito!"
+                            is InstallResult.Failure -> "Error: ${result.reason}"
+                        }
                     }
                 }
             }

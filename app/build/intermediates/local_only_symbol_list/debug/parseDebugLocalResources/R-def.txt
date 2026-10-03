@@ -6,6 +6,7 @@ string adb_status_connecting
 string adb_status_disconnected
 string apk_info_title
 string apk_label
+string apk_lam_detected
 string apk_no_file_selected
 string apk_package
 string apk_parsing_error
@@ -24,10 +25,11 @@ string backup_loading_apps
 string backup_no_apps_found
 string backup_opt_apk
 string backup_opt_desc_apk
-string backup_opt_desc_private_data
-string backup_opt_private_data
+string backup_opt_desc_full_lam
+string backup_opt_full_lam
 string backup_search_hint
 string backup_status_compressing_data
+string backup_status_creating_lam
 string backup_status_extracting
 string backup_status_extracting_data
 string backup_status_failed
@@ -42,6 +44,7 @@ string btn_disconnect_adb
 string btn_install_apk
 string btn_open_dev_settings
 string btn_refresh_catalog
+string btn_restore_file
 string btn_run_id_cmd
 string btn_select_apk
 string btn_show_pairing_notification
@@ -66,6 +69,21 @@ string notification_pairing_failed
 string notification_pairing_success
 string notification_text
 string notification_title
+string restore_dialog_result_title
+string restore_dialog_title
+string restore_err_invalid_lam
+string restore_err_not_debuggable
+string restore_err_pkg_not_installed
+string restore_err_self_restore
+string restore_err_unrecognized_file
+string restore_status_failed
+string restore_status_injecting
+string restore_status_inspecting_lam
+string restore_status_installing_apk
+string restore_status_lam_success
+string restore_status_preparing
+string restore_status_restarting
+string restore_status_success
 string shell_executing
 string shell_output_placeholder
 string tab_backups
@@ -76,4 +94,5 @@ string title_crypto_ok
 string title_installer
 string title_mdns_search
 string title_pairing
+string title_restore
 string title_shell_exec

@@ -2,19 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Permisos de red local y comunicación loopback con ADB (127.0.0.1) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-
-    <!-- Permiso de notificaciones para Android 13+ (API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- 
-        Permiso necesario a partir de Android 11 (API 30) para poder listar 
-        e inspeccionar todas las aplicaciones instaladas en el dispositivo
-    -->
     <uses-permission 
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -28,13 +20,12 @@
         <activity
             android:name=".MainActivity"
             android:exported="true">
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Asociación estándar para archivos APK -->
+            <!-- APK -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -43,56 +34,40 @@
                 <data android:mimeType="application/vnd.android.package-archive" />
             </intent-filter>
 
+            <!-- XAPK -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="file" />
-                <data android:mimeType="application/vnd.android.package-archive" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.xapk" />
             </intent-filter>
 
-            <!-- Asociación para paquetes XAPK (.xapk) -->
+            <!-- APKS -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.apks" />
+            </intent-filter>
+
+            <!-- Contenedor Unificado Local ADB Manager (.lam) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="content" />
                 <data android:host="*" />
-                <data android:pathPattern=".*\\.xapk" />
+                <data android:pathPattern=".*\\.lam" />
             </intent-filter>
 
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="file" />
-                <data android:host="*" />
-                <data android:pathPattern=".*\\.xapk" />
-            </intent-filter>
-
-            <!-- Asociación para paquetes APKS (.apks) -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="content" />
-                <data android:host="*" />
-                <data android:pathPattern=".*\\.apks" />
-            </intent-filter>
-
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="file" />
-                <data android:host="*" />
-                <data android:pathPattern=".*\\.apks" />
-            </intent-filter>
-
-            <!-- Asociación genérica por tipo MIME para exploradores de terceros -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="content" />
                 <data android:mimeType="application/octet-stream" />
-                <data android:pathPattern=".*\\.(apk|xapk|apks)" />
+                <data android:pathPattern=".*\\.lam" />
             </intent-filter>
 
             <intent-filter>
@@ -100,15 +75,12 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="content" />
                 <data android:mimeType="application/zip" />
-                <data android:pathPattern=".*\\.(apk|xapk|apks)" />
+                <data android:pathPattern=".*\\.lam" />
             </intent-filter>
-
         </activity>
 
         <receiver
             android:name=".adb.PairingNotificationReceiver"
             android:exported="false" />
-
     </application>
-
 </manifest>

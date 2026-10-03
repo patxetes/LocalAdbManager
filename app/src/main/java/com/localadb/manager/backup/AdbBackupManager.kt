@@ -6,6 +6,7 @@ import android.os.Environment
 import android.util.Log
 import com.localadb.manager.R
 import com.localadb.manager.adb.AdbConnectionManager
+import org.json.JSONObject
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -23,7 +24,7 @@ sealed class BackupResult {
 
 /**
  * Motor de copias de seguridad de aplicaciones y datos de usuario.
- * Utiliza tuberías atómicas directas para sortear SELinux y restricciones de Scoped Storage (FUSE).
+ * Genera copias individuales (.apk / .apks) o contenedores unificados .lam (APK + Datos + Manifiesto).
  */
 object AdbBackupManager {
 
@@ -42,7 +43,104 @@ object AdbBackupManager {
     }
 
     // =========================================================================
-    // RESPALDO DE BINARIOS (APK / BUNDLE APKS)
+    // CONTENEDOR UNIFICADO LOCAL ADB MANAGER (.lam = APK + DATOS + MANIFEST)
+    // =========================================================================
+
+    /**
+     * Empaqueta el APK/Splits, las bases de datos y preferencias (/data/data) y el manifest.json
+     * en un único contenedor .lam.
+     */
+    fun exportarPaqueteCompletoLam(
+        context: Context,
+        adbManager: AdbConnectionManager,
+        targetPort: Int,
+        app: AppInstalada,
+        onProgreso: (porcentaje: Int, estado: String) -> Unit
+    ): BackupResult {
+
+        if (!app.esDepurable) {
+            return BackupResult.Failure(context.getString(R.string.backup_err_not_debuggable))
+        }
+
+        val directorioDestino = obtenerDirectorioDestino()
+
+        onProgreso(5, "Conectando al demonio ADB...")
+        val conexionOk = adbManager.connectDevice("127.0.0.1", targetPort)
+        if (!conexionOk) {
+            return BackupResult.Failure("No se pudo conectar a ADB en el puerto $targetPort. Activa la depuración Wi-Fi.")
+        }
+
+        val nombreSanitizado = sanitizarNombreFichero(app.nombreVisible)
+        val identificador = app.paqueteId
+        val version = app.versionNombre.replace('/', '_')
+        val ficheroSalida = File(directorioDestino, "${nombreSanitizado}_${identificador}_v${version}_completo.lam")
+
+        try {
+            onProgreso(10, context.getString(R.string.backup_status_creating_lam, app.nombreVisible))
+
+            FileOutputStream(ficheroSalida).use { fos ->
+                BufferedOutputStream(fos, BUFFER_SIZE).use { bos ->
+                    ZipOutputStream(bos).use { zipLam ->
+                        zipLam.setLevel(Deflater.BEST_SPEED)
+
+                        // 1. Escribir manifest.json en la raíz del .lam
+                        val manifestJson = JSONObject().apply {
+                            put("formatVersion", 1)
+                            put("appName", app.nombreVisible)
+                            put("packageName", app.paqueteId)
+                            put("versionName", app.versionNombre)
+                            put("versionCode", app.versionCodigo)
+                            put("isSplit", app.rutasSplits.isNotEmpty())
+                            put("hasPrivateData", true)
+                            put("timestamp", System.currentTimeMillis())
+                        }.toString(2)
+
+                        zipLam.putNextEntry(ZipEntry("manifest.json"))
+                        zipLam.write(manifestJson.toByteArray(Charsets.UTF_8))
+                        zipLam.closeEntry()
+
+                        // 2. Empaquetar binarios APK dentro del directorio apks/ del .lam
+                        onProgreso(25, context.getString(R.string.backup_status_extracting, app.nombreVisible))
+                        empaquetarApksEnZip(adbManager, app.rutaBaseApk, app.rutasSplits, zipLam, "apks/") { pct, status ->
+                            onProgreso(25 + (pct * 35 / 100), status)
+                        }
+
+                        // 3. Empaquetar datos privados con run-as en data.tar.gz dentro del .lam
+                        onProgreso(65, context.getString(R.string.backup_status_extracting_data, app.nombreVisible))
+                        zipLam.putNextEntry(ZipEntry("data.tar.gz"))
+                        empaquetarDatosPrivadosEnGzip(context, adbManager, app.paqueteId, zipLam) { kb ->
+                            onProgreso(65 + minOf(30, (kb / 50).toInt()), context.getString(R.string.backup_status_compressing_data, kb))
+                        }
+                        zipLam.closeEntry()
+
+                        zipLam.finish()
+                        zipLam.flush()
+                    }
+                }
+            }
+
+            prepararFicheroParaUsuario(context, adbManager, ficheroSalida)
+            Log.i(ETIQUETA_LOG, "Paquete .lam creado con éxito: ${ficheroSalida.absolutePath} (${ficheroSalida.length()} bytes)")
+
+            return if (ficheroSalida.exists() && ficheroSalida.length() > 1024) {
+                onProgreso(100, "¡Copia completa finalizada!")
+                BackupResult.Success(ficheroSalida.absolutePath, ficheroSalida.length())
+            } else {
+                ficheroSalida.delete()
+                BackupResult.Failure("Fallo al generar el contenedor .lam.")
+            }
+
+        } catch (e: Exception) {
+            ficheroSalida.delete()
+            Log.e(ETIQUETA_LOG, "Error al exportar paquete .lam", e)
+            return BackupResult.Failure(e.localizedMessage ?: "Error al crear el paquete .lam.")
+        } finally {
+            adbManager.disconnectDevice()
+        }
+    }
+
+    // =========================================================================
+    // RESPALDO DE BINARIOS (APK / BUNDLE APKS INDEPENDIENTES)
     // =========================================================================
 
     /**
@@ -70,11 +168,9 @@ object AdbBackupManager {
 
         try {
             return if (app.rutasSplits.isEmpty()) {
-                // Caso A: App monolítica clásica -> Copia directa con cp a nivel de kernel
                 val ficheroSalida = File(directorioDestino, "${nombreSanitizado}_${identificador}_v${version}.apk")
                 exportarApkMonolitico(context, adbManager, app.rutaBaseApk, ficheroSalida, onProgreso)
             } else {
-                // Caso B: App multi-split -> Streaming atómico TAR a ZIP sin carpetas intermedias en disco
                 val ficheroSalida = File(directorioDestino, "${nombreSanitizado}_${identificador}_v${version}.apks")
                 exportarSplitsApks(context, adbManager, app.rutaBaseApk, app.rutasSplits, ficheroSalida, onProgreso)
             }
@@ -86,9 +182,6 @@ object AdbBackupManager {
         }
     }
 
-    /**
-     * Copia un APK monolítico usando 'cp' a nivel de kernel (UID 2000).
-     */
     private fun exportarApkMonolitico(
         context: Context,
         adbManager: AdbConnectionManager,
@@ -112,10 +205,6 @@ object AdbBackupManager {
         }
     }
 
-    /**
-     * Extrae todos los splits en un único canal continuo usando 'tar' en shell y
-     * transformándolo al vuelo en un contenedor ZIP (.apks) válido en Java.
-     */
     private fun exportarSplitsApks(
         context: Context,
         adbManager: AdbConnectionManager,
@@ -124,71 +213,22 @@ object AdbBackupManager {
         ficheroDestino: File,
         onProgreso: (porcentaje: Int, estado: String) -> Unit
     ): BackupResult {
-        val appDir = File(rutaBase).parentFile?.absolutePath
-            ?: return BackupResult.Failure("No se pudo localizar el directorio de origen de los fragmentos.")
-
-        val totalPartes = 1 + rutasSplits.size
-        var partesProcesadas = 0
-        var totalBytesEscritos = 0L
-
-        val baseName = File(rutaBase).name
-        val splitNames = rutasSplits.map { File(it).name }
-        val fileArgs = (listOf(baseName) + splitNames).joinToString(" ") { "\"$it\"" }
-        val comandoTar = "exec:sh -c \"cd '$appDir' && tar -cf - $fileArgs\""
-
         onProgreso(15, "Iniciando empaquetado de fragmentos...")
 
         try {
-            val canal = adbManager.abrirCanalRobusto(comandoTar)
-            val tarInput = canal.openInputStream()
-
             FileOutputStream(ficheroDestino).use { fos ->
                 BufferedOutputStream(fos, BUFFER_SIZE).use { bos ->
                     ZipOutputStream(bos).use { zipSalida ->
                         zipSalida.setLevel(Deflater.BEST_SPEED)
-
-                        val header = ByteArray(512)
-                        val buffer = ByteArray(BUFFER_SIZE)
-
-                        while (true) {
-                            if (!readFully(tarInput, header)) break
-                            if (header[0] == 0.toByte()) break
-
-                            val rawName = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
-                            val sizeStr = String(header, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
-                            val fileSize = sizeStr.toLongOrNull(8) ?: 0L
-
-                            if (rawName.endsWith(".apk", ignoreCase = true) && fileSize > 0) {
-                                partesProcesadas++
-                                val entryName = File(rawName).name
-                                val porcentaje = 15 + ((partesProcesadas * 80) / totalPartes)
-                                onProgreso(porcentaje, "Guardando ($partesProcesadas de $totalPartes): $entryName...")
-
-                                zipSalida.putNextEntry(ZipEntry(entryName))
-                                copyExact(tarInput, zipSalida, fileSize, buffer) { bytes ->
-                                    totalBytesEscritos += bytes
-                                }
-                                zipSalida.closeEntry()
-
-                                val pad = ((512 - (fileSize % 512)) % 512).toInt()
-                                if (pad > 0) {
-                                    skipFully(tarInput, pad.toLong(), buffer)
-                                }
-                            } else if (fileSize > 0) {
-                                val pad = ((512 - (fileSize % 512)) % 512).toInt()
-                                skipFully(tarInput, fileSize + pad, buffer)
-                            }
-                        }
+                        empaquetarApksEnZip(adbManager, rutaBase, rutasSplits, zipSalida, "", onProgreso)
                         zipSalida.finish()
                         zipSalida.flush()
                     }
                 }
             }
-            tarInput.close()
-            canal.close()
 
             prepararFicheroParaUsuario(context, adbManager, ficheroDestino)
-            Log.i(ETIQUETA_LOG, "Bundle exportado con éxito: ${ficheroDestino.absolutePath} ($totalBytesEscritos bytes)")
+            Log.i(ETIQUETA_LOG, "Bundle exportado con éxito: ${ficheroDestino.absolutePath} (${ficheroDestino.length()} bytes)")
 
             return if (ficheroDestino.exists() && ficheroDestino.length() > 0) {
                 onProgreso(100, "¡Copia de bundle completada!")
@@ -205,14 +245,9 @@ object AdbBackupManager {
     }
 
     // =========================================================================
-    // HITO 3.4: RESPALDO DE DATOS PRIVADOS (APPS EN MODO DEPURACIÓN VÍA RUN-AS)
+    // RESPALDO DE DATOS PRIVADOS INDEPENDIENTES (.tar.gz)
     // =========================================================================
 
-    /**
-     * Extrae las bases de datos y preferencias privadas (/data/data/<paqueteId>) usando run-as.
-     * Lee el flujo TAR en un solo canal continuo, filtra cachés en memoria y comprime a GZIP (.tar.gz)
-     * terminando de forma determinista con el marcador de fin de archivo TAR (sin cuelgues de socket).
-     */
     fun exportarDatosPrivados(
         context: Context,
         adbManager: AdbConnectionManager,
@@ -241,92 +276,21 @@ object AdbBackupManager {
         try {
             onProgreso(20, context.getString(R.string.backup_status_extracting_data, app.nombreVisible))
 
-            // run-as se posiciona automáticamente en el directorio de la app y ejecuta tar directamente
-            val comandoRunAs = "exec:run-as $identificador tar -cf - ."
-            val canalAdb = adbManager.abrirCanalRobusto(comandoRunAs)
-            val tarInput = canalAdb.openInputStream()
-
-            var totalBytesLeidos = 0L
-
             FileOutputStream(ficheroSalida).use { fos ->
                 BufferedOutputStream(fos, BUFFER_SIZE).use { bos ->
-                    GZIPOutputStream(bos).use { gzipSalida ->
-                        val header = ByteArray(512)
-                        val buffer = ByteArray(BUFFER_SIZE)
-
-                        while (true) {
-                            if (!readFully(tarInput, header)) break
-
-                            // 1. Verificación de error de run-as en el primer bloque
-                            if (totalBytesLeidos == 0L) {
-                                val primerBloqueTexto = String(header, 0, 100, Charsets.UTF_8).trim()
-                                if (primerBloqueTexto.startsWith("run-as:", ignoreCase = true) ||
-                                    primerBloqueTexto.contains("not debuggable", ignoreCase = true) ||
-                                    primerBloqueTexto.contains("package unknown", ignoreCase = true)
-                                ) {
-                                    throw Exception("Fallo en run-as: $primerBloqueTexto")
-                                }
-                            }
-
-                            // 2. Comprobar si hemos alcanzado el bloque de cierre del TAR (512 ceros)
-                            if (header[0] == 0.toByte()) {
-                                // Escribimos los dos bloques de 512 ceros que marcan el final estándar de TAR
-                                val zeroBlock = ByteArray(512)
-                                gzipSalida.write(zeroBlock)
-                                gzipSalida.write(zeroBlock)
-                                break // Salida inmediata y limpia: el archivo ha terminado por completo
-                            }
-
-                            // 3. Lectura de cabecera POSIX TAR
-                            val rawName = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
-                            val sizeStr = String(header, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
-                            val fileSize = sizeStr.toLongOrNull(8) ?: 0L
-                            val pad = ((512 - (fileSize % 512)) % 512).toInt()
-
-                            // Filtramos carpetas de caché volátiles (cache/ y code_cache/)
-                            val esCache = rawName == "./cache" || rawName.startsWith("./cache/") ||
-                                          rawName == "./code_cache" || rawName.startsWith("./code_cache/") ||
-                                          rawName == "cache" || rawName.startsWith("cache/") ||
-                                          rawName == "code_cache" || rawName.startsWith("code_cache/")
-
-                            if (esCache) {
-                                if (fileSize > 0) skipFully(tarInput, fileSize, buffer)
-                                if (pad > 0) skipFully(tarInput, pad.toLong(), buffer)
-                            } else {
-                                gzipSalida.write(header, 0, 512)
-                                totalBytesLeidos += 512
-
-                                if (fileSize > 0) {
-                                    val entryName = File(rawName).name
-                                    val kb = totalBytesLeidos / 1024
-                                    onProgreso(
-                                        50,
-                                        context.getString(R.string.backup_status_compressing_data, kb) + " ($entryName)"
-                                    )
-
-                                    copyExact(tarInput, gzipSalida, fileSize, buffer) { bytes ->
-                                        totalBytesLeidos += bytes
-                                    }
-                                }
-
-                                if (pad > 0) {
-                                    copyExact(tarInput, gzipSalida, pad.toLong(), buffer) { bytes ->
-                                        totalBytesLeidos += bytes
-                                    }
-                                }
-                            }
-                        }
-                        gzipSalida.finish()
-                        gzipSalida.flush()
+                    empaquetarDatosPrivadosEnGzip(context, adbManager, app.paqueteId, bos) { kb ->
+                        onProgreso(
+                            50,
+                            context.getString(R.string.backup_status_compressing_data, kb)
+                        )
                     }
+                    bos.flush()
                 }
             }
-            tarInput.close()
-            canalAdb.close()
 
             prepararFicheroParaUsuario(context, adbManager, ficheroSalida)
 
-            return if (ficheroSalida.exists() && ficheroSalida.length() > 64 && totalBytesLeidos >= 512) {
+            return if (ficheroSalida.exists() && ficheroSalida.length() > 64) {
                 onProgreso(100, "¡Copia de datos privados finalizada!")
                 Log.i(ETIQUETA_LOG, "Datos privados respaldados: ${ficheroSalida.absolutePath} (${ficheroSalida.length()} bytes)")
                 BackupResult.Success(ficheroSalida.absolutePath, ficheroSalida.length())
@@ -341,6 +305,142 @@ object AdbBackupManager {
             return BackupResult.Failure(e.localizedMessage ?: "Fallo durante la ejecución de run-as.")
         } finally {
             adbManager.disconnectDevice()
+        }
+    }
+
+    // =========================================================================
+    // RUTINAS DE EMPAQUETADO ATÓMICO (REUTILIZABLES PARA .APKS Y .LAM)
+    // =========================================================================
+
+    private fun empaquetarApksEnZip(
+        adbManager: AdbConnectionManager,
+        rutaBase: String,
+        rutasSplits: List<String>,
+        zipSalida: ZipOutputStream,
+        prefijoEntrada: String = "",
+        onProgreso: (porcentaje: Int, estado: String) -> Unit
+    ) {
+        val appDir = File(rutaBase).parentFile?.absolutePath
+            ?: throw Exception("No se pudo localizar el directorio de la aplicación.")
+
+        val totalPartes = 1 + rutasSplits.size
+        var partesProcesadas = 0
+
+        val baseName = File(rutaBase).name
+        val splitNames = rutasSplits.map { File(it).name }
+        val fileArgs = (listOf(baseName) + splitNames).joinToString(" ") { "\"$it\"" }
+        val comandoTar = "exec:sh -c \"cd '$appDir' && tar -cf - $fileArgs\""
+
+        val canal = adbManager.abrirCanalRobusto(comandoTar)
+        val tarInput = canal.openInputStream()
+
+        val header = ByteArray(512)
+        val buffer = ByteArray(BUFFER_SIZE)
+
+        try {
+            while (true) {
+                if (!readFully(tarInput, header)) break
+                if (header[0] == 0.toByte()) break
+
+                val rawName = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
+                val sizeStr = String(header, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+                val fileSize = sizeStr.toLongOrNull(8) ?: 0L
+
+                if (rawName.endsWith(".apk", ignoreCase = true) && fileSize > 0) {
+                    partesProcesadas++
+                    val entryName = prefijoEntrada + File(rawName).name
+                    val pct = (partesProcesadas * 100) / totalPartes
+                    onProgreso(pct, "Guardando ($partesProcesadas de $totalPartes): ${File(rawName).name}...")
+
+                    zipSalida.putNextEntry(ZipEntry(entryName))
+                    copyExact(tarInput, zipSalida, fileSize, buffer) {}
+                    zipSalida.closeEntry()
+
+                    val pad = ((512 - (fileSize % 512)) % 512).toInt()
+                    if (pad > 0) skipFully(tarInput, pad.toLong(), buffer)
+                } else if (fileSize > 0) {
+                    val pad = ((512 - (fileSize % 512)) % 512).toInt()
+                    skipFully(tarInput, fileSize + pad, buffer)
+                }
+            }
+        } finally {
+            tarInput.close()
+            canal.close()
+        }
+    }
+
+    private fun empaquetarDatosPrivadosEnGzip(
+        context: Context,
+        adbManager: AdbConnectionManager,
+        identificador: String,
+        destinoStream: OutputStream,
+        onProgresoKb: (Long) -> Unit
+    ) {
+        val comandoRunAs = "exec:run-as $identificador tar -cf - ."
+        val canalAdb = adbManager.abrirCanalRobusto(comandoRunAs)
+        val tarInput = canalAdb.openInputStream()
+
+        var totalBytesLeidos = 0L
+        val gzipSalida = GZIPOutputStream(destinoStream)
+        val header = ByteArray(512)
+        val buffer = ByteArray(BUFFER_SIZE)
+
+        try {
+            while (true) {
+                if (!readFully(tarInput, header)) break
+
+                if (totalBytesLeidos == 0L) {
+                    val primerBloque = String(header, 0, 100, Charsets.UTF_8).trim()
+                    if (primerBloque.startsWith("run-as:", ignoreCase = true) ||
+                        primerBloque.contains("not debuggable", ignoreCase = true)
+                    ) {
+                        throw Exception("Fallo en run-as: $primerBloque")
+                    }
+                }
+
+                if (header[0] == 0.toByte()) {
+                    val zeroBlock = ByteArray(512)
+                    gzipSalida.write(zeroBlock)
+                    gzipSalida.write(zeroBlock)
+                    break
+                }
+
+                val rawName = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
+                val sizeStr = String(header, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+                val fileSize = sizeStr.toLongOrNull(8) ?: 0L
+                val pad = ((512 - (fileSize % 512)) % 512).toInt()
+
+                val esCache = rawName == "./cache" || rawName.startsWith("./cache/") ||
+                              rawName == "./code_cache" || rawName.startsWith("./code_cache/") ||
+                              rawName == "cache" || rawName.startsWith("cache/") ||
+                              rawName == "code_cache" || rawName.startsWith("code_cache/")
+
+                if (esCache) {
+                    if (fileSize > 0) skipFully(tarInput, fileSize, buffer)
+                    if (pad > 0) skipFully(tarInput, pad.toLong(), buffer)
+                } else {
+                    gzipSalida.write(header, 0, 512)
+                    totalBytesLeidos += 512
+
+                    if (fileSize > 0) {
+                        copyExact(tarInput, gzipSalida, fileSize, buffer) { bytes ->
+                            totalBytesLeidos += bytes
+                        }
+                        onProgresoKb(totalBytesLeidos / 1024)
+                    }
+
+                    if (pad > 0) {
+                        copyExact(tarInput, gzipSalida, pad.toLong(), buffer) { bytes ->
+                            totalBytesLeidos += bytes
+                        }
+                    }
+                }
+            }
+            gzipSalida.finish()
+            gzipSalida.flush()
+        } finally {
+            tarInput.close()
+            canalAdb.close()
         }
     }
 
