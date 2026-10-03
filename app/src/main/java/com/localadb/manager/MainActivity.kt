@@ -7,15 +7,15 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,8 +24,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -33,23 +37,27 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import com.localadb.manager.adb.AdbConnectionManager
 import com.localadb.manager.adb.AdbMdnsManager
 import com.localadb.manager.adb.PairingNotificationReceiver
+import com.localadb.manager.installer.AdbPackageInstaller
+import com.localadb.manager.installer.ApkParser
+import com.localadb.manager.installer.InstallResult
+import com.localadb.manager.installer.PackageDetails
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -58,6 +66,9 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var mdnsManager: AdbMdnsManager
     private lateinit var adbConnectionManager: AdbConnectionManager
+
+    // Almacena el Uri del archivo APK si la app fue abierta desde el explorador
+    private val selectedApkUri = mutableStateOf<Uri?>(null)
 
     private val requestNotificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* No-op */ }
@@ -69,6 +80,7 @@ class MainActivity : ComponentActivity() {
 
         setupNotificationChannel()
         checkNotificationPermission()
+        captureIncomingApkIntent(intent)
 
         setContent {
             MaterialTheme {
@@ -76,13 +88,27 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ShellControlScreen(
+                    InstallerScreen(
                         mdnsManager = mdnsManager,
                         adbManager = adbConnectionManager,
+                        initialApkUri = selectedApkUri.value,
                         onOpenSettings = { openDeveloperSettings() },
                         onShowNotification = { port -> showPairingNotification(port) }
                     )
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        captureIncomingApkIntent(intent)
+    }
+
+    private fun captureIncomingApkIntent(incomingIntent: Intent?) {
+        if (incomingIntent?.action == Intent.ACTION_VIEW) {
+            incomingIntent.data?.let { uri ->
+                selectedApkUri.value = uri
             }
         }
     }
@@ -113,8 +139,8 @@ class MainActivity : ComponentActivity() {
 
     private fun checkNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val permissionStatus = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-            if (permissionStatus != PackageManager.PERMISSION_GRANTED) {
+            val status = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            if (status != PackageManager.PERMISSION_GRANTED) {
                 requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
@@ -157,46 +183,79 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun ShellControlScreen(
+fun InstallerScreen(
     mdnsManager: AdbMdnsManager,
     adbManager: AdbConnectionManager,
+    initialApkUri: Uri?,
     onOpenSettings: () -> Unit,
     onShowNotification: (Int) -> Unit
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    // Estados reactivos de red
+    // Estados de red y conexión ADB
     var isScanning by remember { mutableStateOf(false) }
     var connectPort by remember { mutableStateOf<Int?>(null) }
     var pairingPort by remember { mutableStateOf<Int?>(null) }
-
-    // Estados de conexión ADB y consola
     var isConnected by remember { mutableStateOf(false) }
     var isConnecting by remember { mutableStateOf(false) }
-    var consoleOutput by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Estados del paquete seleccionado
+    var currentUri by remember { mutableStateOf(initialApkUri) }
+    var parsedApk by remember { mutableStateOf<PackageDetails?>(null) }
+    var parsingError by remember { mutableStateOf<String?>(null) }
+
+    // Estados del proceso de instalación
+    var isInstalling by remember { mutableStateOf(false) }
+    var installProgress by remember { mutableFloatStateOf(0f) }
+    var installStatusMessage by remember { mutableStateOf<String?>(null) }
+
+    // Selector de archivos SAF
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            currentUri = uri
+            installStatusMessage = null
+            coroutineScope.launch {
+                parsingError = null
+                parsedApk = withContext(Dispatchers.IO) {
+                    ApkParser.extractDetails(context, uri)
+                }
+                if (parsedApk == null) {
+                    parsingError = "No se pudieron extraer los metadatos del paquete."
+                }
+            }
+        }
+    }
+
+    DisposableEffect(initialApkUri) {
+        if (initialApkUri != null) {
+            coroutineScope.launch {
+                parsedApk = withContext(Dispatchers.IO) {
+                    ApkParser.extractDetails(context, initialApkUri)
+                }
+            }
+        }
+        onDispose { }
+    }
 
     val mdnsCallback = remember {
         object : AdbMdnsManager.DiscoveryCallback {
             override fun onConnectPortFound(port: Int) {
                 connectPort = port
             }
-
             override fun onPairingPortFound(port: Int) {
                 pairingPort = port
             }
-
             override fun onError(message: String) {
-                errorMessage = message
                 isScanning = false
             }
         }
     }
 
     DisposableEffect(Unit) {
-        onDispose {
-            mdnsManager.stopDiscovery()
-        }
+        onDispose { mdnsManager.stopDiscovery() }
     }
 
     Column(
@@ -206,39 +265,19 @@ fun ShellControlScreen(
             .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Título del Hito
         Text(
             text = stringResource(id = R.string.app_name),
             style = MaterialTheme.typography.headlineMedium
         )
         Text(
-            text = stringResource(id = R.string.title_shell_exec),
+            text = stringResource(id = R.string.title_installer),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 4.dp)
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Diagnóstico mDNS
-        val connectText = if (connectPort != null) {
-            stringResource(id = R.string.mdns_service_connect_found, connectPort!!)
-        } else {
-            stringResource(id = R.string.mdns_service_not_found)
-        }
-        Text(text = connectText, style = MaterialTheme.typography.bodyMedium)
-
-        if (pairingPort != null) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = stringResource(id = R.string.mdns_service_pairing_found, pairingPort!!),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Fila de botones de escaneo y ajustes
+        // Controles de conexión ADB
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly
@@ -249,7 +288,6 @@ fun ShellControlScreen(
                         mdnsManager.stopDiscovery()
                         isScanning = false
                     } else {
-                        errorMessage = null
                         mdnsManager.startDiscovery(mdnsCallback)
                         isScanning = true
                     }
@@ -258,43 +296,6 @@ fun ShellControlScreen(
                 Text(text = if (isScanning) stringResource(R.string.btn_stop_scan) else stringResource(R.string.btn_start_scan))
             }
 
-            OutlinedButton(onClick = onOpenSettings) {
-                Text(text = stringResource(R.string.btn_open_dev_settings))
-            }
-        }
-
-        // Botón de emparejamiento (solo visible si se detecta puerto pairing)
-        if (pairingPort != null) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = { pairingPort?.let { onShowNotification(it) } }
-            ) {
-                Text(text = stringResource(R.string.btn_show_pairing_notification))
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Estado de conexión ADB
-        val adbStatusText = when {
-            isConnecting -> stringResource(R.string.adb_status_connecting)
-            isConnected -> stringResource(R.string.adb_status_connected, connectPort ?: 0)
-            else -> stringResource(R.string.adb_status_disconnected)
-        }
-        Text(
-            text = adbStatusText,
-            style = MaterialTheme.typography.titleSmall,
-            color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Botones de Conectar y Ejecutar comando Shell
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            // Botón Conectar / Desconectar
             Button(
                 enabled = connectPort != null && !isConnecting,
                 onClick = {
@@ -303,66 +304,132 @@ fun ShellControlScreen(
                         isConnected = false
                     } else {
                         isConnecting = true
-                        errorMessage = null
                         coroutineScope.launch {
                             val ok = withContext(Dispatchers.IO) {
                                 adbManager.connectDevice("127.0.0.1", connectPort!!)
                             }
                             isConnected = ok
                             isConnecting = false
-                            if (!ok) {
-                                errorMessage = "Fallo al conectar. ¿Está el dispositivo emparejado?"
-                            }
                         }
                     }
                 }
             ) {
                 Text(text = if (isConnected) stringResource(R.string.btn_disconnect_adb) else stringResource(R.string.btn_connect_adb))
             }
-
-            // Botón Ejecutar "id"
-            Button(
-                enabled = isConnected,
-                onClick = {
-                    coroutineScope.launch {
-                        consoleOutput = "Ejecutando \"id\"..."
-                        val result = withContext(Dispatchers.IO) {
-                            adbManager.executeCommand("id")
-                        }
-                        consoleOutput = result
-                    }
-                }
-            ) {
-                Text(text = stringResource(R.string.btn_run_id_cmd))
-            }
-        }
-
-        // Mensajes de error si los hubiera
-        if (errorMessage != null) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = errorMessage!!,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Consola de Salida Shell (Simulación de Terminal Linux)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(160.dp)
-                .background(Color(0xFF1E1E1E))
-                .padding(12.dp)
+        // Selector manual de APK
+        Button(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                filePickerLauncher.launch(arrayOf("application/vnd.android.package-archive", "*/*"))
+            }
         ) {
-            Text(
-                text = if (consoleOutput.isEmpty()) stringResource(R.string.shell_output_placeholder) else consoleOutput,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                color = if (consoleOutput.contains("uid=2000")) Color(0xFF4CAF50) else Color(0xFFD4D4D4)
-            )
+            Text(text = stringResource(R.string.btn_select_apk))
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Tarjeta con información del APK seleccionado
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = stringResource(R.string.apk_info_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (parsedApk != null) {
+                    val apk = parsedApk!!
+                    val sizeMb = apk.fileSizeBytes / (1024.0 * 1024.0)
+
+                    Text(text = stringResource(R.string.apk_label, apk.displayName), style = MaterialTheme.typography.bodyLarge)
+                    Text(text = stringResource(R.string.apk_package, apk.identifier), style = MaterialTheme.typography.bodyMedium)
+                    Text(text = stringResource(R.string.apk_version, apk.versionName, apk.versionCode), style = MaterialTheme.typography.bodyMedium)
+                    Text(text = stringResource(R.string.apk_size, sizeMb), style = MaterialTheme.typography.bodyMedium)
+                } else if (parsingError != null) {
+                    Text(
+                        text = stringResource(R.string.apk_parsing_error, parsingError!!),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.apk_no_file_selected),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Botón de Instalación mediante streaming ADB
+        Button(
+            modifier = Modifier.fillMaxWidth(),
+            enabled = isConnected && parsedApk != null && currentUri != null && !isInstalling,
+            onClick = {
+                val uri = currentUri ?: return@Button
+                val bytes = parsedApk?.fileSizeBytes ?: return@Button
+
+                isInstalling = true
+                installProgress = 0f
+                installStatusMessage = "Iniciando instalación..."
+
+                coroutineScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        AdbPackageInstaller.install(
+                            context = context,
+                            adbManager = adbManager,
+                            apkUri = uri,
+                            totalBytes = bytes
+                        ) { percent, status ->
+                            installProgress = percent / 100f
+                            installStatusMessage = status
+                        }
+                    }
+
+                    isInstalling = false
+                    installStatusMessage = when (result) {
+                        is InstallResult.Success -> "¡Instalación completada con éxito!"
+                        is InstallResult.Failure -> "Error: ${result.reason}"
+                    }
+                }
+            }
+        ) {
+            Text(text = stringResource(R.string.btn_install_apk))
+        }
+
+        // Barra de progreso y mensajes de instalación
+        if (isInstalling || installStatusMessage != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (isInstalling) {
+                LinearProgressIndicator(
+                    progress = { installProgress },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            installStatusMessage?.let { msg ->
+                val isError = msg.startsWith("Error", ignoreCase = true)
+                Text(
+                    text = msg,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 }

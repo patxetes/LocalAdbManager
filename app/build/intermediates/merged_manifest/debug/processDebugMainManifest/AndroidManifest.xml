@@ -8,13 +8,13 @@
         android:minSdkVersion="30"
         android:targetSdkVersion="35" />
 
-    <!-- Permisos de comunicación de red local y loopback -->
+    <!-- Permisos para comunicación de red local y sockets loopback (127.0.0.1) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
-    <!-- Permiso para mostrar notificaciones en Android 13 (API 33) o superior -->
+    <!-- Permiso para notificaciones interactivas en Android 13 (API 33) o superior -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <permission
@@ -37,14 +37,51 @@
         <activity
             android:name="com.localadb.manager.MainActivity"
             android:exported="true" >
+
+            <!-- Lanzador estándar de la aplicación desde el escritorio -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+                Filtro 1: Captura archivos APK abiertos mediante esquema de contenido (content://)
+                utilizado por la mayoría de gestores de archivos modernos y descargas.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="content" />
+                <data android:mimeType="application/vnd.android.package-archive" />
+            </intent-filter>
+
+<!--                 Filtro 2: Captura archivos abiertos directamente con esquema de fichero local (file://) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:scheme="file" />
+                <data android:mimeType="application/vnd.android.package-archive" />
+            </intent-filter>
+
+<!--                 Filtro 3: Soporte para gestores de archivos que no declaran el MIME type y usan la extensión -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:scheme="content" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.apk" />
+            </intent-filter>
         </activity>
 
-        <!-- Receptor que procesa la respuesta tecleada en la notificación -->
+        <!-- Receptor de eventos para la notificación interactiva de pairing -->
         <receiver
             android:name="com.localadb.manager.adb.PairingNotificationReceiver"
             android:exported="false" />
