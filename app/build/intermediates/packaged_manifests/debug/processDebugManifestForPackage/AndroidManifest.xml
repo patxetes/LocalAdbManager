@@ -8,11 +8,20 @@
         android:minSdkVersion="30"
         android:targetSdkVersion="35" />
 
+    <!-- Permisos de red local y comunicación loopback con ADB (127.0.0.1) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Permiso de notificaciones para Android 13+ (API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        Permiso necesario a partir de Android 11 (API 30) para poder listar 
+        e inspeccionar todas las aplicaciones instaladas en el dispositivo
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <permission
         android:name="com.localadb.manager.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
@@ -40,7 +49,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- 1. Asociación estándar para archivos APK -->
+            <!-- Asociación estándar para archivos APK -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -59,7 +68,7 @@
                 <data android:mimeType="application/vnd.android.package-archive" />
             </intent-filter>
 
-            <!-- 2. Asociación para paquetes XAPK (.xapk) -->
+            <!-- Asociación para paquetes XAPK (.xapk) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -80,7 +89,7 @@
                 <data android:pathPattern=".*\\.xapk" />
             </intent-filter>
 
-            <!-- 3. Asociación para paquetes APKS (.apks) -->
+            <!-- Asociación para paquetes APKS (.apks) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -101,7 +110,7 @@
                 <data android:pathPattern=".*\\.apks" />
             </intent-filter>
 
-            <!-- 4. Filtro MIME comodín para gestores de archivos genéricos -->
+            <!-- Asociación genérica por tipo MIME para exploradores de terceros -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 

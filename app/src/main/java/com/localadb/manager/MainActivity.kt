@@ -21,7 +21,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,39 +34,54 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import com.localadb.manager.adb.AdbConnectionManager
 import com.localadb.manager.adb.AdbMdnsManager
 import com.localadb.manager.adb.PairingNotificationReceiver
+import com.localadb.manager.backup.AdbBackupManager
+import com.localadb.manager.backup.AppInstalada
+import com.localadb.manager.backup.BackupResult
+import com.localadb.manager.backup.PackageCatalogManager
 import com.localadb.manager.installer.AdbPackageInstaller
 import com.localadb.manager.installer.ApkParser
 import com.localadb.manager.installer.BundleAnalysisResult
@@ -99,7 +117,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    InstallerScreen(
+                    AppNavegacionPrincipal(
                         mdnsManager = mdnsManager,
                         adbManager = adbConnectionManager,
                         initialApkUri = selectedApkUri.value,
@@ -193,28 +211,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Contenedor principal con barra de pestañas (Instalador / Copias de Seguridad).
+ */
 @Composable
-fun InstallerScreen(
+fun AppNavegacionPrincipal(
     mdnsManager: AdbMdnsManager,
     adbManager: AdbConnectionManager,
     initialApkUri: Uri?,
     onOpenSettings: () -> Unit,
     onShowNotification: (Int) -> Unit
 ) {
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-
+    var pestanaActual by remember { mutableIntStateOf(0) }
     var connectPort by remember { mutableStateOf<Int?>(null) }
     var pairingPort by remember { mutableStateOf<Int?>(null) }
-
-    var currentUri by remember { mutableStateOf(initialApkUri) }
-    var parsedApk by remember { mutableStateOf<PackageDetails?>(null) }
-    var bundleAnalysis by remember { mutableStateOf<BundleAnalysisResult?>(null) }
-    var parsingError by remember { mutableStateOf<String?>(null) }
-
-    var isInstalling by remember { mutableStateOf(false) }
-    var installProgress by remember { mutableFloatStateOf(0f) }
-    var installStatusMessage by remember { mutableStateOf<String?>(null) }
 
     val mdnsCallback = remember {
         object : AdbMdnsManager.DiscoveryCallback {
@@ -228,7 +238,6 @@ fun InstallerScreen(
         }
     }
 
-    // 1. Escaneo automático al abrir la aplicación
     LaunchedEffect(Unit) {
         mdnsManager.startDiscovery(mdnsCallback)
     }
@@ -236,6 +245,451 @@ fun InstallerScreen(
     DisposableEffect(Unit) {
         onDispose { mdnsManager.stopDiscovery() }
     }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TabRow(selectedTabIndex = pestanaActual) {
+            Tab(
+                selected = pestanaActual == 0,
+                onClick = { pestanaActual = 0 },
+                text = { Text(text = stringResource(R.string.tab_installer)) }
+            )
+            Tab(
+                selected = pestanaActual == 1,
+                onClick = { pestanaActual = 1 },
+                text = { Text(text = stringResource(R.string.tab_backups)) }
+            )
+        }
+
+        if (pestanaActual == 0) {
+            InstallerScreen(
+                adbManager = adbManager,
+                connectPort = connectPort,
+                pairingPort = pairingPort,
+                initialApkUri = initialApkUri,
+                onOpenSettings = onOpenSettings,
+                onShowNotification = onShowNotification
+            )
+        } else {
+            BackupCatalogScreen(
+                adbManager = adbManager,
+                connectPort = connectPort,
+                mdnsManager = mdnsManager,
+                mdnsCallback = mdnsCallback
+            )
+        }
+    }
+}
+
+/**
+ * Pestaña 2: Catálogo de Aplicaciones y Menú de Opciones de Respaldo.
+ */
+@Composable
+fun BackupCatalogScreen(
+    adbManager: AdbConnectionManager,
+    connectPort: Int?,
+    mdnsManager: AdbMdnsManager,
+    mdnsCallback: AdbMdnsManager.DiscoveryCallback
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var cargando by remember { mutableStateOf(true) }
+    var textoBusqueda by remember { mutableStateOf("") }
+    var listaApps by remember { mutableStateOf<List<AppInstalada>>(emptyList()) }
+
+    var appSeleccionadaParaOpciones by remember { mutableStateOf<AppInstalada?>(null) }
+    var appEnProceso by remember { mutableStateOf<AppInstalada?>(null) }
+    var progresoBackup by remember { mutableFloatStateOf(0f) }
+    var estadoBackupTexto by remember { mutableStateOf("") }
+    var dialogoResultadoTexto by remember { mutableStateOf<String?>(null) }
+
+    fun recargarCatalogo() {
+        cargando = true
+        Thread {
+            val resultado = PackageCatalogManager.obtenerAplicacionesUsuario(context)
+            listaApps = resultado
+            cargando = false
+        }.start()
+    }
+
+    LaunchedEffect(Unit) {
+        recargarCatalogo()
+    }
+
+    val appsFiltradas = remember(textoBusqueda, listaApps) {
+        if (textoBusqueda.isBlank()) {
+            listaApps
+        } else {
+            val query = textoBusqueda.trim().lowercase()
+            listaApps.filter {
+                it.nombreVisible.lowercase().contains(query) ||
+                it.paqueteId.lowercase().contains(query)
+            }
+        }
+    }
+
+    // Ejecuta la copia (sea solo de APK o de datos privados vía run-as)
+    fun ejecutarCopia(app: AppInstalada, soloDatosPrivados: Boolean) {
+        appSeleccionadaParaOpciones = null
+        appEnProceso = app
+        progresoBackup = 0f
+        estadoBackupTexto = if (soloDatosPrivados) {
+            "Preparando extracción de datos con run-as..."
+        } else {
+            context.getString(R.string.backup_status_extracting, app.nombreVisible)
+        }
+
+        coroutineScope.launch {
+            var puerto = connectPort
+            if (puerto == null) {
+                mdnsManager.startDiscovery(mdnsCallback)
+                for (i in 1..15) {
+                    delay(200)
+                    puerto = connectPort
+                    if (puerto != null) break
+                }
+            }
+
+            if (puerto == null) {
+                appEnProceso = null
+                dialogoResultadoTexto = "Error: No se detecta el puerto ADB inalámbrico. Actívalo en Ajustes de desarrollador."
+                return@launch
+            }
+
+            val resultado = withContext(Dispatchers.IO) {
+                if (soloDatosPrivados) {
+                    AdbBackupManager.exportarDatosPrivados(
+                        context = context,
+                        adbManager = adbManager,
+                        targetPort = puerto,
+                        app = app
+                    ) { percent, status ->
+                        progresoBackup = percent / 100f
+                        estadoBackupTexto = status
+                    }
+                } else {
+                    AdbBackupManager.exportarApk(
+                        context = context,
+                        adbManager = adbManager,
+                        targetPort = puerto,
+                        app = app
+                    ) { percent, status ->
+                        progresoBackup = percent / 100f
+                        estadoBackupTexto = status
+                    }
+                }
+            }
+
+            appEnProceso = null
+            dialogoResultadoTexto = when (resultado) {
+                is BackupResult.Success -> {
+                    val mb = resultado.tamanoBytes / (1024.0 * 1024.0)
+                    val pesoFormateado = "${String.format("%.2f", mb)} MB"
+                    context.getString(R.string.backup_status_success, resultado.rutaFichero, pesoFormateado)
+                }
+                is BackupResult.Failure -> {
+                    context.getString(R.string.backup_status_failed, resultado.motivo)
+                }
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.title_backup_catalog),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = textoBusqueda,
+            onValueChange = { textoBusqueda = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(text = stringResource(R.string.backup_search_hint)) },
+            singleLine = true,
+            shape = RoundedCornerShape(10.dp)
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.backup_total_apps, appsFiltradas.size),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedButton(onClick = { recargarCatalogo() }) {
+                Text(text = stringResource(R.string.btn_refresh_catalog))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (cargando) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = stringResource(R.string.backup_loading_apps), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        } else if (appsFiltradas.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = stringResource(R.string.backup_no_apps_found),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(appsFiltradas, key = { it.paqueteId }) { app ->
+                    ItemAppCatalogo(
+                        app = app,
+                        estaEnProgreso = appEnProceso != null,
+                        onCopiaDirectaApk = { ejecutarCopia(app, soloDatosPrivados = false) },
+                        onAbrirOpciones = { appSeleccionadaParaOpciones = app }
+                    )
+                }
+            }
+        }
+    }
+
+    // Diálogo EXCLUSIVO para Apps en modo depuración (ofrece APK o Datos con run-as)
+    if (appSeleccionadaParaOpciones != null) {
+        val app = appSeleccionadaParaOpciones!!
+        AlertDialog(
+            onDismissRequest = { appSeleccionadaParaOpciones = null },
+            title = { Text(text = stringResource(R.string.title_backup_options)) },
+            text = {
+                Column {
+                    Text(text = app.nombreVisible, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(text = app.paqueteId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Opción A: Copia de APK / APKS
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { ejecutarCopia(app, soloDatosPrivados = false) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = stringResource(R.string.backup_opt_apk), fontWeight = FontWeight.SemiBold)
+                            Text(text = stringResource(R.string.backup_opt_desc_apk), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Opción B: Copia de Datos Privados (Bases de datos y SharedPreferences vía run-as)
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { ejecutarCopia(app, soloDatosPrivados = true) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = "Copia de Datos Privados (run-as)", fontWeight = FontWeight.SemiBold)
+                            Text(text = "Exporta bases de datos SQLite y SharedPreferences de /data/data.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { appSeleccionadaParaOpciones = null }) {
+                    Text(text = stringResource(R.string.btn_cancel))
+                }
+            }
+        )
+    }
+
+    // Diálogo de progreso en tiempo real
+    if (appEnProceso != null) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(text = stringResource(R.string.backup_dialog_title)) },
+            text = {
+                Column {
+                    Text(text = appEnProceso!!.nombreVisible, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LinearProgressIndicator(
+                        progress = { progresoBackup },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = estadoBackupTexto, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    // Diálogo informativo del resultado final
+    if (dialogoResultadoTexto != null) {
+        AlertDialog(
+            onDismissRequest = { dialogoResultadoTexto = null },
+            title = { Text(text = stringResource(R.string.backup_dialog_result_title)) },
+            text = { Text(text = dialogoResultadoTexto!!) },
+            confirmButton = {
+                TextButton(onClick = { dialogoResultadoTexto = null }) {
+                    Text(text = "Aceptar")
+                }
+            }
+        )
+    }
+}
+
+/**
+ * Fila visual de cada aplicación en el catálogo.
+ */
+@Composable
+fun ItemAppCatalogo(
+    app: AppInstalada,
+    estaEnProgreso: Boolean,
+    onCopiaDirectaApk: () -> Unit,
+    onAbrirOpciones: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val bitmapIcono = remember(app.icono) {
+                app.icono?.let { convertirDrawableABitmap(it) }
+            }
+
+            if (bitmapIcono != null) {
+                Image(
+                    bitmap = bitmapIcono.asImageBitmap(),
+                    contentDescription = app.nombreVisible,
+                    modifier = Modifier.size(48.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = app.nombreVisible,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = app.paqueteId,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text(
+                    text = "v${app.versionNombre} (${app.versionCodigo})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                val colorFondo = if (app.esDepurable) Color(0xFF2E7D32) else MaterialTheme.colorScheme.secondaryContainer
+                val colorTexto = if (app.esDepurable) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
+                val textoInsignia = if (app.esDepurable) {
+                    stringResource(R.string.backup_badge_debuggable)
+                } else {
+                    stringResource(R.string.backup_badge_standard)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .background(colorFondo, shape = RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = textoInsignia,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colorTexto
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Apps estándar: botón directo "Copia APK" | Apps debug: botón "Backup" con diálogo de opciones
+            val textoBoton = if (app.esDepurable) {
+                stringResource(R.string.btn_backup_action)
+            } else {
+                stringResource(R.string.btn_backup_apk)
+            }
+
+            Button(
+                enabled = !estaEnProgreso,
+                onClick = {
+                    if (app.esDepurable) {
+                        onAbrirOpciones()
+                    } else {
+                        onCopiaDirectaApk()
+                    }
+                }
+            ) {
+                Text(text = textoBoton, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+/**
+ * Pestaña 1: Pantalla del Instalador.
+ */
+@Composable
+fun InstallerScreen(
+    adbManager: AdbConnectionManager,
+    connectPort: Int?,
+    pairingPort: Int?,
+    initialApkUri: Uri?,
+    onOpenSettings: () -> Unit,
+    onShowNotification: (Int) -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var currentUri by remember { mutableStateOf(initialApkUri) }
+    var parsedApk by remember { mutableStateOf<PackageDetails?>(null) }
+    var bundleAnalysis by remember { mutableStateOf<BundleAnalysisResult?>(null) }
+    var parsingError by remember { mutableStateOf<String?>(null) }
+
+    var isInstalling by remember { mutableStateOf(false) }
+    var installProgress by remember { mutableFloatStateOf(0f) }
+    var installStatusMessage by remember { mutableStateOf<String?>(null) }
 
     fun processSelectedUri(uri: Uri) {
         currentUri = uri
@@ -296,16 +750,15 @@ fun InstallerScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Estado del puerto de conexión detectado
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             val estadoPuerto = if (connectPort != null) {
-                stringResource(id = R.string.mdns_service_connect_found, connectPort!!)
+                stringResource(id = R.string.mdns_service_connect_found, connectPort)
             } else {
-                "Buscando depuración Wi-Fi..."
+                stringResource(id = R.string.mdns_service_not_found)
             }
             Text(
                 text = estadoPuerto,
@@ -327,7 +780,6 @@ fun InstallerScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Selector manual de archivos
         Button(
             modifier = Modifier.fillMaxWidth(),
             onClick = {
@@ -346,7 +798,6 @@ fun InstallerScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Tarjeta con información e ICONO REAL del paquete
         Card(
             modifier = Modifier.fillMaxWidth(),
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
@@ -441,7 +892,7 @@ fun InstallerScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Botón inteligente Todo en Uno: escanea si hace falta, conecta e instala
+        val puertoActivo = connectPort
         Button(
             modifier = Modifier.fillMaxWidth(),
             enabled = bundleAnalysis != null && currentUri != null && !isInstalling,
@@ -454,10 +905,8 @@ fun InstallerScreen(
                 installStatusMessage = "Localizando puerto ADB..."
 
                 coroutineScope.launch {
-                    // Si el puerto aún no fue resuelto por mDNS, esperamos hasta 3 segundos
-                    var puerto = connectPort
+                    var puerto = puertoActivo
                     if (puerto == null) {
-                        mdnsManager.startDiscovery(mdnsCallback)
                         for (i in 1..15) {
                             delay(200)
                             puerto = connectPort
@@ -467,7 +916,7 @@ fun InstallerScreen(
 
                     if (puerto == null) {
                         isInstalling = false
-                        installStatusMessage = "Error: No se detecta el puerto de depuración Wi-Fi. Asegúrate de activarlo en Ajustes."
+                        installStatusMessage = "Error: No se detecta el puerto de depuración Wi-Fi. Actívalo en Ajustes."
                         return@launch
                     }
 
