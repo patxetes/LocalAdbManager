@@ -1,0 +1,22 @@
+{
+    "emulator.emulatorPathLinux": "/home/paco/Android/Sdk/emulator",
+    "java.home": "/usr/lib/jvm/java-17-openjdk",
+    "java.configuration.runtimes": [
+        {
+            "name": "JavaSE-17",
+            "path": "/usr/lib/jvm/java-17-openjdk",
+            "default": true
+        }
+    ],
+    "kotlin.java.home": "/usr/lib/jvm/java-17-openjdk",
+    "terminal.integrated.env.linux": {
+        "JAVA_HOME": "/usr/lib/jvm/java-17-openjdk",
+        "ANDROID_HOME": "/home/paco/Android/Sdk"
+    },
+    "files.exclude": {
+        "**/.git": true,
+        "**/.gradle": true,
+        "**/build": true
+    },
+    "java.configuration.updateBuildConfiguration": "automatic"
+}

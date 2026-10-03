@@ -1,0 +1,23 @@
+# Directorios de compilación y caches de Gradle
+*.iml
+.gradle
+/build
+/*/build
+/captures
+
+# Configuración local del SDK y máquina del usuario
+local.properties
+.DS_Store
+
+# Archivos de entorno y temporales
+*.log
+*.tmp
+
+# Archivos de configuración de VS Code (opcional: guardamos settings pero excluimos temporales)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# Claves de firma privadas de release (por seguridad nunca se suben)
+*.jks
+*.keystore

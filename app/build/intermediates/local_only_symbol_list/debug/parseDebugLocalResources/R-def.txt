@@ -1,0 +1,23 @@
+R_DEF: Internal format may change without notice
+local
+string app_name
+string btn_open_dev_settings
+string btn_show_pairing_notification
+string btn_start_scan
+string btn_stop_scan
+string mdns_service_connect_found
+string mdns_service_not_found
+string mdns_service_pairing_found
+string mdns_status_idle
+string mdns_status_searching
+string notification_action_send
+string notification_channel_desc
+string notification_channel_name
+string notification_input_label
+string notification_pairing_failed
+string notification_pairing_success
+string notification_text
+string notification_title
+string title_crypto_ok
+string title_mdns_search
+string title_pairing
