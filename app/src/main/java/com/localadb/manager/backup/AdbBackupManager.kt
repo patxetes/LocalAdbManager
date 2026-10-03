@@ -6,12 +6,14 @@ import android.os.Environment
 import android.util.Log
 import com.localadb.manager.R
 import com.localadb.manager.adb.AdbConnectionManager
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.security.MessageDigest
 import java.util.zip.Deflater
 import java.util.zip.GZIPOutputStream
 import java.util.zip.ZipEntry
@@ -22,9 +24,15 @@ sealed class BackupResult {
     data class Failure(val motivo: String) : BackupResult()
 }
 
+data class ArtifactRecord(
+    val path: String,
+    val sha256: String,
+    val sizeBytes: Long
+)
+
 /**
  * Motor de copias de seguridad de aplicaciones y datos de usuario.
- * Genera copias individuales (.apk / .apks) o contenedores unificados .lam (APK + Datos + Manifiesto).
+ * Genera copias individuales (.apk / .apks) o contenedores unificados .lam (APK + Datos + Manifiesto con SHA-256).
  */
 object AdbBackupManager {
 
@@ -48,7 +56,7 @@ object AdbBackupManager {
 
     /**
      * Empaqueta el APK/Splits, las bases de datos y preferencias (/data/data) y el manifest.json
-     * en un único contenedor .lam.
+     * con verificación criptográfica SHA-256 en un único contenedor .lam.
      */
     fun exportarPaqueteCompletoLam(
         context: Context,
@@ -74,6 +82,7 @@ object AdbBackupManager {
         val identificador = app.paqueteId
         val version = app.versionNombre.replace('/', '_')
         val ficheroSalida = File(directorioDestino, "${nombreSanitizado}_${identificador}_v${version}_completo.lam")
+        val artifactsList = mutableListOf<ArtifactRecord>()
 
         try {
             onProgreso(10, context.getString(R.string.backup_status_creating_lam, app.nombreVisible))
@@ -83,7 +92,40 @@ object AdbBackupManager {
                     ZipOutputStream(bos).use { zipLam ->
                         zipLam.setLevel(Deflater.BEST_SPEED)
 
-                        // 1. Escribir manifest.json en la raíz del .lam
+                        // 1. Empaquetar binarios APKs dentro de apks/ y calcular sus hashes SHA-256
+                        onProgreso(25, context.getString(R.string.backup_status_extracting, app.nombreVisible))
+                        val apkArtifacts = empaquetarApksEnZip(adbManager, app.rutaBaseApk, app.rutasSplits, zipLam, "apks/") { pct, status ->
+                            onProgreso(25 + (pct * 35 / 100), status)
+                        }
+                        artifactsList.addAll(apkArtifacts)
+
+                        // 2. Empaquetar datos privados con run-as en data.tar.gz y calcular su hash SHA-256
+                        onProgreso(65, context.getString(R.string.backup_status_extracting_data, app.nombreVisible))
+                        zipLam.putNextEntry(ZipEntry("data.tar.gz"))
+                        val digestStream = DigestCountingOutputStream(zipLam)
+                        empaquetarDatosPrivadosEnGzip(context, adbManager, app.paqueteId, digestStream) { kb ->
+                            onProgreso(65 + minOf(25, (kb / 50).toInt()), context.getString(R.string.backup_status_compressing_data, kb))
+                        }
+                        zipLam.closeEntry()
+
+                        artifactsList.add(
+                            ArtifactRecord(
+                                path = "data.tar.gz",
+                                sha256 = digestStream.obtenerHashHex(),
+                                sizeBytes = digestStream.bytesWritten
+                            )
+                        )
+
+                        // 3. Escribir manifest.json con metadatos e integridad SHA-256
+                        val artifactsJsonArray = JSONArray()
+                        for (art in artifactsList) {
+                            artifactsJsonArray.put(JSONObject().apply {
+                                put("path", art.path)
+                                put("sha256", art.sha256)
+                                put("sizeBytes", art.sizeBytes)
+                            })
+                        }
+
                         val manifestJson = JSONObject().apply {
                             put("formatVersion", 1)
                             put("appName", app.nombreVisible)
@@ -93,24 +135,11 @@ object AdbBackupManager {
                             put("isSplit", app.rutasSplits.isNotEmpty())
                             put("hasPrivateData", true)
                             put("timestamp", System.currentTimeMillis())
+                            put("artifacts", artifactsJsonArray)
                         }.toString(2)
 
                         zipLam.putNextEntry(ZipEntry("manifest.json"))
                         zipLam.write(manifestJson.toByteArray(Charsets.UTF_8))
-                        zipLam.closeEntry()
-
-                        // 2. Empaquetar binarios APK dentro del directorio apks/ del .lam
-                        onProgreso(25, context.getString(R.string.backup_status_extracting, app.nombreVisible))
-                        empaquetarApksEnZip(adbManager, app.rutaBaseApk, app.rutasSplits, zipLam, "apks/") { pct, status ->
-                            onProgreso(25 + (pct * 35 / 100), status)
-                        }
-
-                        // 3. Empaquetar datos privados con run-as en data.tar.gz dentro del .lam
-                        onProgreso(65, context.getString(R.string.backup_status_extracting_data, app.nombreVisible))
-                        zipLam.putNextEntry(ZipEntry("data.tar.gz"))
-                        empaquetarDatosPrivadosEnGzip(context, adbManager, app.paqueteId, zipLam) { kb ->
-                            onProgreso(65 + minOf(30, (kb / 50).toInt()), context.getString(R.string.backup_status_compressing_data, kb))
-                        }
                         zipLam.closeEntry()
 
                         zipLam.finish()
@@ -123,7 +152,7 @@ object AdbBackupManager {
             Log.i(ETIQUETA_LOG, "Paquete .lam creado con éxito: ${ficheroSalida.absolutePath} (${ficheroSalida.length()} bytes)")
 
             return if (ficheroSalida.exists() && ficheroSalida.length() > 1024) {
-                onProgreso(100, "¡Copia completa finalizada!")
+                onProgreso(100, "¡Copia de app y datos finalizada!")
                 BackupResult.Success(ficheroSalida.absolutePath, ficheroSalida.length())
             } else {
                 ficheroSalida.delete()
@@ -319,12 +348,13 @@ object AdbBackupManager {
         zipSalida: ZipOutputStream,
         prefijoEntrada: String = "",
         onProgreso: (porcentaje: Int, estado: String) -> Unit
-    ) {
+    ): List<ArtifactRecord> {
         val appDir = File(rutaBase).parentFile?.absolutePath
             ?: throw Exception("No se pudo localizar el directorio de la aplicación.")
 
         val totalPartes = 1 + rutasSplits.size
         var partesProcesadas = 0
+        val artifacts = mutableListOf<ArtifactRecord>()
 
         val baseName = File(rutaBase).name
         val splitNames = rutasSplits.map { File(it).name }
@@ -350,11 +380,15 @@ object AdbBackupManager {
                     partesProcesadas++
                     val entryName = prefijoEntrada + File(rawName).name
                     val pct = (partesProcesadas * 100) / totalPartes
-                    onProgreso(pct, "Guardando ($partesProcesadas de $totalPartes): ${File(rawName).name}...")
+                    onProgreso(pct, "Guardando APK ($partesProcesadas de $totalPartes): ${File(rawName).name}...")
 
+                    val md = MessageDigest.getInstance("SHA-256")
                     zipSalida.putNextEntry(ZipEntry(entryName))
-                    copyExact(tarInput, zipSalida, fileSize, buffer) {}
+                    copyExactWithDigest(tarInput, zipSalida, fileSize, buffer, md)
                     zipSalida.closeEntry()
+
+                    val hashHex = md.digest().joinToString("") { "%02x".format(it) }
+                    artifacts.add(ArtifactRecord(entryName, hashHex, fileSize))
 
                     val pad = ((512 - (fileSize % 512)) % 512).toInt()
                     if (pad > 0) skipFully(tarInput, pad.toLong(), buffer)
@@ -367,6 +401,7 @@ object AdbBackupManager {
             tarInput.close()
             canal.close()
         }
+        return artifacts
     }
 
     private fun empaquetarDatosPrivadosEnGzip(
@@ -476,6 +511,26 @@ object AdbBackupManager {
         }
     }
 
+    private fun copyExactWithDigest(
+        input: InputStream,
+        output: OutputStream,
+        count: Long,
+        buffer: ByteArray,
+        digest: MessageDigest
+    ) {
+        var remaining = count
+        while (remaining > 0) {
+            val toRead = minOf(remaining, buffer.size.toLong()).toInt()
+            val read = input.read(buffer, 0, toRead)
+            if (read == -1) {
+                throw java.io.EOFException("Flujo TAR interrumpido. Faltaban $remaining bytes.")
+            }
+            digest.update(buffer, 0, read)
+            output.write(buffer, 0, read)
+            remaining -= read
+        }
+    }
+
     private fun skipFully(input: InputStream, count: Long, buffer: ByteArray) {
         var remaining = count
         while (remaining > 0) {
@@ -484,6 +539,29 @@ object AdbBackupManager {
             if (read == -1) break
             remaining -= read
         }
+    }
+
+    private class DigestCountingOutputStream(
+        private val out: OutputStream,
+        val digest: MessageDigest = MessageDigest.getInstance("SHA-256")
+    ) : OutputStream() {
+        var bytesWritten = 0L
+
+        override fun write(b: Int) {
+            digest.update(b.toByte())
+            out.write(b)
+            bytesWritten++
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            digest.update(b, off, len)
+            out.write(b, off, len)
+            bytesWritten += len
+        }
+
+        override fun flush() = out.flush()
+
+        fun obtenerHashHex(): String = digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun prepararFicheroParaUsuario(context: Context, adbManager: AdbConnectionManager, fichero: File) {

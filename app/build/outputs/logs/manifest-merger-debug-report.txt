@@ -1,9 +1,9 @@
 -- Merging decision tree log ---
 manifest
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-86:12
-INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-86:12
-INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-86:12
-INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-86:12
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-87:12
+INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-87:12
+INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-87:12
+INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-87:12
 MERGED from [androidx.compose.material3:material3-android:1.3.0] /home/paco/.gradle/caches/8.9/transforms/1e4fcd774ce21ed276ce28d3f2fb9149/transformed/material3-release/AndroidManifest.xml:17:1-22:12
 MERGED from [androidx.compose.animation:animation-core-android:1.7.0] /home/paco/.gradle/caches/8.9/transforms/8234d1624f53ae14f5552ad1bcc0b560/transformed/animation-core-release/AndroidManifest.xml:2:1-7:12
 MERGED from [androidx.compose.material:material-ripple-android:1.7.0] /home/paco/.gradle/caches/8.9/transforms/4543d56969f26f2d015fa143e09a7a3e/transformed/material-ripple-release/AndroidManifest.xml:2:1-7:12
@@ -88,8 +88,8 @@ ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.x
 	android:name
 		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:11:9-61
 application
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:14:5-85:19
-INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:14:5-85:19
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:15:5-86:19
+INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:15:5-86:19
 MERGED from [androidx.emoji2:emoji2:1.3.0] /home/paco/.gradle/caches/8.9/transforms/655687e7f2987f195f6f6296966a1818/transformed/emoji2-1.3.0/AndroidManifest.xml:23:5-33:19
 MERGED from [androidx.emoji2:emoji2:1.3.0] /home/paco/.gradle/caches/8.9/transforms/655687e7f2987f195f6f6296966a1818/transformed/emoji2-1.3.0/AndroidManifest.xml:23:5-33:19
 MERGED from [androidx.core:core:1.13.1] /home/paco/.gradle/caches/8.9/transforms/bf2978fafc49e8113c2a781e4029cadc/transformed/core-1.13.1/AndroidManifest.xml:28:5-89
@@ -109,69 +109,69 @@ MERGED from [org.conscrypt:conscrypt-android:2.5.3] /home/paco/.gradle/caches/8.
 	android:appComponentFactory
 		ADDED from [androidx.core:core:1.13.1] /home/paco/.gradle/caches/8.9/transforms/bf2978fafc49e8113c2a781e4029cadc/transformed/core-1.13.1/AndroidManifest.xml:28:18-86
 	android:supportsRtl
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:17:9-35
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:18:9-35
 	android:label
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:16:9-41
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:17:9-41
 	android:allowBackup
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:15:9-35
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:16:9-36
 	android:theme
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:18:9-66
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:19:9-66
 activity#com.localadb.manager.MainActivity
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:20:9-80:20
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:21:9-81:20
 	android:exported
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:22:13-36
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:23:13-36
 	android:name
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:21:13-41
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:22:13-41
 intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:23:13-26:29
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:24:13-27:29
 action#android.intent.action.MAIN
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:24:17-69
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:25:17-69
 	android:name
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:24:25-66
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:25:25-66
 category#android.intent.category.LAUNCHER
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:25:17-77
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:26:17-77
 	android:name
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:25:27-74
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:26:27-74
 intent-filter#action:name:android.intent.action.VIEW+category:name:android.intent.category.BROWSABLE+category:name:android.intent.category.DEFAULT+data:mimeType:application/vnd.android.package-archive+data:scheme:content
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:29:13-35:29
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:30:13-36:29
 action#android.intent.action.VIEW
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:30:17-69
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:31:17-69
 	android:name
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:30:25-66
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:31:25-66
 category#android.intent.category.DEFAULT
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:31:17-76
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:32:17-76
 	android:name
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:31:27-73
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:32:27-73
 category#android.intent.category.BROWSABLE
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:32:17-78
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:33:17-78
 	android:name
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:32:27-75
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:33:27-75
 data
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:33:17-50
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:34:17-50
 	android:host
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:42:23-39
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:43:23-39
 	android:scheme
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:33:23-47
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:34:23-47
 	android:pathPattern
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:43:23-54
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:44:23-54
 	android:mimeType
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:34:23-81
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:35:23-81
 intent-filter#action:name:android.intent.action.VIEW+category:name:android.intent.category.DEFAULT+data:host:*+data:pathPattern:.*\\.xapk+data:scheme:content
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:38:13-44:29
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:39:13-45:29
 intent-filter#action:name:android.intent.action.VIEW+category:name:android.intent.category.DEFAULT+data:host:*+data:pathPattern:.*\\.apks+data:scheme:content
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:47:13-53:29
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:48:13-54:29
 intent-filter#action:name:android.intent.action.VIEW+category:name:android.intent.category.BROWSABLE+category:name:android.intent.category.DEFAULT+data:host:*+data:pathPattern:.*\\.lam+data:scheme:content
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:56:13-63:29
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:57:13-64:29
 intent-filter#action:name:android.intent.action.VIEW+category:name:android.intent.category.DEFAULT+data:mimeType:application/octet-stream+data:pathPattern:.*\\.lam+data:scheme:content
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:65:13-71:29
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:66:13-72:29
 intent-filter#action:name:android.intent.action.VIEW+category:name:android.intent.category.DEFAULT+data:mimeType:application/zip+data:pathPattern:.*\\.lam+data:scheme:content
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:73:13-79:29
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:74:13-80:29
 receiver#com.localadb.manager.adb.PairingNotificationReceiver
-ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:82:9-84:40
+ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:83:9-85:40
 	android:exported
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:84:13-37
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:85:13-37
 	android:name
-		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:83:13-60
+		ADDED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:84:13-60
 uses-sdk
 INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
 INJECTED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml
@@ -319,11 +319,11 @@ ADDED from [androidx.lifecycle:lifecycle-process:2.8.3] /home/paco/.gradle/cache
 	android:name
 		ADDED from [androidx.lifecycle:lifecycle-process:2.8.3] /home/paco/.gradle/caches/8.9/transforms/58725960c9f1f3a73e9e0f9031a08600/transformed/lifecycle-process-2.8.3/AndroidManifest.xml:30:17-78
 uses-permission#android.permission.WRITE_EXTERNAL_STORAGE
-IMPLIED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-86:12 reason: io.github.muntashirakon.adb has a targetSdkVersion < 4
+IMPLIED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-87:12 reason: io.github.muntashirakon.adb has a targetSdkVersion < 4
 uses-permission#android.permission.READ_PHONE_STATE
-IMPLIED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-86:12 reason: io.github.muntashirakon.adb has a targetSdkVersion < 4
+IMPLIED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-87:12 reason: io.github.muntashirakon.adb has a targetSdkVersion < 4
 uses-permission#android.permission.READ_EXTERNAL_STORAGE
-IMPLIED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-86:12 reason: io.github.muntashirakon.adb requested WRITE_EXTERNAL_STORAGE
+IMPLIED from /home/paco/development/LocalAdbManager/app/src/main/AndroidManifest.xml:2:1-87:12 reason: io.github.muntashirakon.adb requested WRITE_EXTERNAL_STORAGE
 meta-data#androidx.profileinstaller.ProfileInstallerInitializer
 ADDED from [androidx.profileinstaller:profileinstaller:1.3.1] /home/paco/.gradle/caches/8.9/transforms/3fba7c255d422eeb3c040067b093fec3/transformed/profileinstaller-1.3.1/AndroidManifest.xml:29:13-31:52
 	android:value

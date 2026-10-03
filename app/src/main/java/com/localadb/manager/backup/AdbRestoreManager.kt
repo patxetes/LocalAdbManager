@@ -15,6 +15,8 @@ import com.localadb.manager.installer.InstallResult
 import org.json.JSONObject
 import java.io.InputStream
 import java.io.OutputStream
+import java.security.DigestInputStream
+import java.security.MessageDigest
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipException
 import java.util.zip.ZipInputStream
@@ -32,12 +34,14 @@ data class ManifestLam(
     val versionCode: Long,
     val isSplit: Boolean,
     val hasPrivateData: Boolean,
-    val timestamp: Long
+    val timestamp: Long,
+    val artifacts: List<ArtifactRecord> = emptyList()
 )
 
 /**
  * Motor de restauración completa de aplicaciones.
- * Orquesta la instalación de binarios y la inyección de datos privados desde archivos .lam, .apks o .tar.gz.
+ * Orquesta la instalación de binarios y la inyección de datos privados desde archivos .lam, .apks o .tar.gz
+ * con verificación criptográfica SHA-256 y blindaje contra ataques de Path Traversal (Tar-Slip).
  */
 object AdbRestoreManager {
 
@@ -45,7 +49,7 @@ object AdbRestoreManager {
     private const val BUFFER_SIZE = 64 * 1024 // 64 KB
 
     /**
-     * Lee y analiza el archivo manifest.json contenido en un paquete .lam.
+     * Lee y analiza el archivo manifest.json contenido en un paquete .lam, incluyendo la lista de artefactos SHA-256.
      */
     fun leerManifestDeLam(context: Context, uri: Uri): ManifestLam? {
         try {
@@ -56,6 +60,22 @@ object AdbRestoreManager {
                     if (entry.name == "manifest.json" || entry.name.endsWith("/manifest.json")) {
                         val jsonString = zip.readBytes().toString(Charsets.UTF_8)
                         val json = JSONObject(jsonString)
+
+                        val artifactsList = mutableListOf<ArtifactRecord>()
+                        val artifactsArray = json.optJSONArray("artifacts")
+                        if (artifactsArray != null) {
+                            for (i in 0 until artifactsArray.length()) {
+                                val item = artifactsArray.getJSONObject(i)
+                                artifactsList.add(
+                                    ArtifactRecord(
+                                        path = item.optString("path", ""),
+                                        sha256 = item.optString("sha256", ""),
+                                        sizeBytes = item.optLong("sizeBytes", 0L)
+                                    )
+                                )
+                            }
+                        }
+
                         return ManifestLam(
                             formatVersion = json.optInt("formatVersion", 1),
                             appName = json.optString("appName", "Aplicación"),
@@ -64,7 +84,8 @@ object AdbRestoreManager {
                             versionCode = json.optLong("versionCode", 1L),
                             isSplit = json.optBoolean("isSplit", false),
                             hasPrivateData = json.optBoolean("hasPrivateData", false),
-                            timestamp = json.optLong("timestamp", System.currentTimeMillis())
+                            timestamp = json.optLong("timestamp", System.currentTimeMillis()),
+                            artifacts = artifactsList
                         )
                     }
                     zip.closeEntry()
@@ -79,7 +100,7 @@ object AdbRestoreManager {
 
     /**
      * Orquestador de restauración para contenedores .lam.
-     * Permite instalar solo el APK o realizar la restauración completa (APK + Datos privados).
+     * Permite instalar solo el APK o realizar la restauración completa (APK + Datos privados con verificación SHA-256).
      */
     fun restaurarPaqueteLam(
         context: Context,
@@ -132,10 +153,12 @@ object AdbRestoreManager {
             return RestoreResult.Failure("Fallo al instalar binarios: ${resultadoInstall.reason}")
         }
 
-        // 2. Paso 2/2: Inyectar datos privados si están incluidos en el .lam y no se seleccionó 'soloApk'
+        // 2. Paso 2/2: Inyectar datos privados con verificación SHA-256 y protección Tar-Slip
         if (!soloApk && manifest.hasPrivateData) {
             onProgreso(60, context.getString(R.string.restore_status_injecting, paqueteId))
-            val resDatos = inyectarDatosPrivadosDesdeLam(context, adbManager, targetPort, uri, paqueteId) { pct, status ->
+            val expectedSha = manifest.artifacts.find { it.path == "data.tar.gz" }?.sha256
+
+            val resDatos = inyectarDatosPrivadosDesdeLam(context, adbManager, targetPort, uri, paqueteId, expectedSha) { pct, status ->
                 onProgreso(60 + (pct * 35 / 100), "Paso 2/2: $status")
             }
 
@@ -149,7 +172,8 @@ object AdbRestoreManager {
     }
 
     /**
-     * Extrae data.tar.gz de un .lam y lo inyecta por streaming en /data/data/<paqueteId> vía run-as.
+     * Extrae data.tar.gz de un .lam, verifica su SHA-256, filtra rutas inseguras (Tar-Slip)
+     * e inyecta los datos por streaming en /data/data/<paqueteId> vía run-as.
      */
     private fun inyectarDatosPrivadosDesdeLam(
         context: Context,
@@ -157,6 +181,7 @@ object AdbRestoreManager {
         targetPort: Int,
         uri: Uri,
         paqueteId: String,
+        expectedSha256: String?,
         onProgreso: (porcentaje: Int, estado: String) -> Unit
     ): RestoreResult {
         val pm = context.packageManager
@@ -196,16 +221,54 @@ object AdbRestoreManager {
                 var entry = zip.nextEntry
                 while (entry != null) {
                     if (entry.name == "data.tar.gz" || entry.name.endsWith("/data.tar.gz")) {
-                        GZIPInputStream(zip).use { gzipInput ->
+                        val md = MessageDigest.getInstance("SHA-256")
+                        val dis = DigestInputStream(zip, md)
+
+                        GZIPInputStream(dis).use { gzipInput ->
+                            val header = ByteArray(512)
                             val buffer = ByteArray(BUFFER_SIZE)
-                            var leidos: Int
-                            while (gzipInput.read(buffer).also { leidos = it } != -1) {
-                                canalOut.write(buffer, 0, leidos)
-                                totalBytesInyectados += leidos
-                                val kb = totalBytesInyectados / 1024
-                                onProgreso(50, context.getString(R.string.restore_status_injecting, paqueteId) + " (${kb} KB)")
+
+                            while (true) {
+                                if (!readFully(gzipInput, header)) break
+                                if (header[0] == 0.toByte()) break
+
+                                val rawName = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
+
+                                // Blindaje contra Tar-Slip (Path Traversal)
+                                if (rawName.startsWith("/") || rawName.contains("../") || rawName.contains("/..") || rawName == "..") {
+                                    throw Exception(context.getString(R.string.restore_err_tar_slip, rawName))
+                                }
+
+                                val sizeStr = String(header, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+                                val fileSize = sizeStr.toLongOrNull(8) ?: 0L
+                                val pad = ((512 - (fileSize % 512)) % 512).toInt()
+
+                                canalOut.write(header, 0, 512)
+                                totalBytesInyectados += 512
+
+                                if (fileSize > 0) {
+                                    copyExact(gzipInput, canalOut, fileSize, buffer) { bytes ->
+                                        totalBytesInyectados += bytes
+                                        val kb = totalBytesInyectados / 1024
+                                        onProgreso(50, context.getString(R.string.restore_status_injecting, paqueteId) + " (${kb} KB)")
+                                    }
+                                }
+
+                                if (pad > 0) {
+                                    copyExact(gzipInput, canalOut, pad.toLong(), buffer) { bytes ->
+                                        totalBytesInyectados += bytes
+                                    }
+                                }
                             }
                             canalOut.flush()
+                        }
+
+                        // Validación criptográfica SHA-256
+                        if (!expectedSha256.isNullOrBlank()) {
+                            val computedHash = md.digest().joinToString("") { "%02x".format(it) }
+                            if (!computedHash.equals(expectedSha256, ignoreCase = true)) {
+                                throw Exception(context.getString(R.string.restore_err_checksum_mismatch, "data.tar.gz"))
+                            }
                         }
                         break
                     }
@@ -216,6 +279,7 @@ object AdbRestoreManager {
             canalOut.close()
             canal.close()
 
+            // Detener el proceso para que la app objetivo recargue su estado limpio
             onProgreso(95, context.getString(R.string.restore_status_restarting))
             adbManager.executeCommand("am force-stop $paqueteId")
 
@@ -327,16 +391,40 @@ object AdbRestoreManager {
 
             rawInput.use { input ->
                 GZIPInputStream(input).use { gzipInput ->
+                    val header = ByteArray(512)
                     val buffer = ByteArray(BUFFER_SIZE)
-                    var leidos: Int
-                    while (gzipInput.read(buffer).also { leidos = it } != -1) {
-                        canalOut.write(buffer, 0, leidos)
-                        totalBytesInyectados += leidos
-                        val kb = totalBytesInyectados / 1024
-                        onProgreso(
-                            50,
-                            context.getString(R.string.restore_status_injecting, paqueteId) + " (${kb} KB)"
-                        )
+
+                    while (true) {
+                        if (!readFully(gzipInput, header)) break
+                        if (header[0] == 0.toByte()) break
+
+                        val rawName = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
+
+                        // Blindaje contra Tar-Slip (Path Traversal)
+                        if (rawName.startsWith("/") || rawName.contains("../") || rawName.contains("/..") || rawName == "..") {
+                            throw Exception(context.getString(R.string.restore_err_tar_slip, rawName))
+                        }
+
+                        val sizeStr = String(header, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+                        val fileSize = sizeStr.toLongOrNull(8) ?: 0L
+                        val pad = ((512 - (fileSize % 512)) % 512).toInt()
+
+                        canalOut.write(header, 0, 512)
+                        totalBytesInyectados += 512
+
+                        if (fileSize > 0) {
+                            copyExact(gzipInput, canalOut, fileSize, buffer) { bytes ->
+                                totalBytesInyectados += bytes
+                                val kb = totalBytesInyectados / 1024
+                                onProgreso(50, context.getString(R.string.restore_status_injecting, paqueteId) + " (${kb} KB)")
+                            }
+                        }
+
+                        if (pad > 0) {
+                            copyExact(gzipInput, canalOut, pad.toLong(), buffer) { bytes ->
+                                totalBytesInyectados += bytes
+                            }
+                        }
                     }
                     canalOut.flush()
                 }
@@ -362,6 +450,38 @@ object AdbRestoreManager {
             return RestoreResult.Failure(e.localizedMessage ?: "Error inesperado durante la restauración.")
         } finally {
             adbManager.disconnectDevice()
+        }
+    }
+
+    private fun readFully(input: InputStream, buffer: ByteArray): Boolean {
+        var offset = 0
+        while (offset < buffer.size) {
+            val read = input.read(buffer, offset, buffer.size - offset)
+            if (read == -1) {
+                return offset == buffer.size
+            }
+            offset += read
+        }
+        return true
+    }
+
+    private fun copyExact(
+        input: InputStream,
+        output: OutputStream,
+        count: Long,
+        buffer: ByteArray,
+        onBytesRead: (Long) -> Unit
+    ) {
+        var remaining = count
+        while (remaining > 0) {
+            val toRead = minOf(remaining, buffer.size.toLong()).toInt()
+            val read = input.read(buffer, 0, toRead)
+            if (read == -1) {
+                throw java.io.EOFException("Flujo TAR interrumpido prematuramente. Faltaban $remaining bytes.")
+            }
+            output.write(buffer, 0, read)
+            remaining -= read
+            onBytesRead(read.toLong())
         }
     }
 }

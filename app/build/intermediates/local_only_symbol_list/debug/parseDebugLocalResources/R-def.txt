@@ -71,10 +71,12 @@ string notification_text
 string notification_title
 string restore_dialog_result_title
 string restore_dialog_title
+string restore_err_checksum_mismatch
 string restore_err_invalid_lam
 string restore_err_not_debuggable
 string restore_err_pkg_not_installed
 string restore_err_self_restore
+string restore_err_tar_slip
 string restore_err_unrecognized_file
 string restore_opt_desc_full
 string restore_opt_desc_only_apk
@@ -89,6 +91,7 @@ string restore_status_lam_success
 string restore_status_preparing
 string restore_status_restarting
 string restore_status_success
+string restore_status_verifying
 string shell_executing
 string shell_output_placeholder
 string tab_backups
