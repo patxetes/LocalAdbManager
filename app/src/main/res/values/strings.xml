@@ -43,10 +43,13 @@
     <string name="btn_backup_action">Backup</string>
     <string name="btn_refresh_catalog">Actualizar Lista</string>
     <string name="btn_cancel">Cancelar</string>
+    <string name="btn_accept">Aceptar</string>
 
-    <!-- Opciones del Diálogo de Backup -->
+    <!-- Opciones del Diálogo de Backup (Hito 3.4) -->
     <string name="backup_opt_apk">Copia de APK / Bundle</string>
     <string name="backup_opt_desc_apk">Exporta los archivos binarios necesarios para reinstalar la app.</string>
+    <string name="backup_opt_private_data">Copia de Datos Privados (run-as)</string>
+    <string name="backup_opt_desc_private_data">Exporta bases de datos SQLite y preferencias de /data/data.</string>
 
     <!-- Notificación Interactiva -->
     <string name="notification_channel_name">Canal de Emparejamiento ADB</string>
@@ -89,11 +92,14 @@
     <string name="backup_loading_apps">Cargando catálogo de aplicaciones instaladas…</string>
     <string name="backup_no_apps_found">No se encontraron aplicaciones con ese filtro.</string>
 
-    <!-- Estados del Respaldo de APK -->
+    <!-- Estados del Respaldo de APK y Datos (Hito 3.4) -->
     <string name="backup_dialog_title">Exportando Copia de Seguridad</string>
     <string name="backup_dialog_result_title">Resultado del Respaldo</string>
     <string name="backup_status_extracting">Extrayendo binarios de %1$s…</string>
-    <string name="backup_status_packaging">Empaquetando splits en contenedor .apks…</string>
+    <string name="backup_status_extracting_data">Extrayendo datos privados de %1$s con run-as…</string>
+    <string name="backup_status_compressing_data">Comprimiendo datos privados con GZIP (%1$d KB)…</string>
     <string name="backup_status_success">Copia guardada en:\n\n%1$s\n\nTamaño: %2$s</string>
     <string name="backup_status_failed">Error al exportar copia: %1$s</string>
+    <string name="backup_err_not_debuggable">Android solo permite extraer datos privados de aplicaciones marcadas en modo depuración (FLAG_DEBUGGABLE).</string>
+    <string name="backup_err_no_data">No se generaron datos de usuario (el directorio está vacío o run-as fue denegado).</string>
 </resources>

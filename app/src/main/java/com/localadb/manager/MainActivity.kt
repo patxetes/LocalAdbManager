@@ -281,7 +281,7 @@ fun AppNavegacionPrincipal(
 }
 
 /**
- * Pestaña 2: Catálogo de Aplicaciones y Menú de Opciones de Respaldo.
+ * Pestaña 2: Catálogo de Aplicaciones y Acciones de Copia de Seguridad.
  */
 @Composable
 fun BackupCatalogScreen(
@@ -328,13 +328,13 @@ fun BackupCatalogScreen(
         }
     }
 
-    // Ejecuta la copia (sea solo de APK o de datos privados vía run-as)
+    // Ejecuta la copia: solo APK/Bundle o datos privados con run-as
     fun ejecutarCopia(app: AppInstalada, soloDatosPrivados: Boolean) {
         appSeleccionadaParaOpciones = null
         appEnProceso = app
         progresoBackup = 0f
         estadoBackupTexto = if (soloDatosPrivados) {
-            "Preparando extracción de datos con run-as..."
+            context.getString(R.string.backup_status_extracting_data, app.nombreVisible)
         } else {
             context.getString(R.string.backup_status_extracting, app.nombreVisible)
         }
@@ -352,7 +352,7 @@ fun BackupCatalogScreen(
 
             if (puerto == null) {
                 appEnProceso = null
-                dialogoResultadoTexto = "Error: No se detecta el puerto ADB inalámbrico. Actívalo en Ajustes de desarrollador."
+                dialogoResultadoTexto = context.getString(R.string.mdns_service_not_found)
                 return@launch
             }
 
@@ -384,7 +384,11 @@ fun BackupCatalogScreen(
             dialogoResultadoTexto = when (resultado) {
                 is BackupResult.Success -> {
                     val mb = resultado.tamanoBytes / (1024.0 * 1024.0)
-                    val pesoFormateado = "${String.format("%.2f", mb)} MB"
+                    val pesoFormateado = if (mb >= 1.0) {
+                        String.format("%.2f MB", mb)
+                    } else {
+                        String.format("%.2f KB", resultado.tamanoBytes / 1024.0)
+                    }
                     context.getString(R.string.backup_status_success, resultado.rutaFichero, pesoFormateado)
                 }
                 is BackupResult.Failure -> {
@@ -475,7 +479,7 @@ fun BackupCatalogScreen(
         }
     }
 
-    // Diálogo EXCLUSIVO para Apps en modo depuración (ofrece APK o Datos con run-as)
+    // Diálogo modal exclusivo para Apps en modo depuración (ofrece APK o Datos con run-as)
     if (appSeleccionadaParaOpciones != null) {
         val app = appSeleccionadaParaOpciones!!
         AlertDialog(
@@ -484,7 +488,11 @@ fun BackupCatalogScreen(
             text = {
                 Column {
                     Text(text = app.nombreVisible, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text(text = app.paqueteId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = app.paqueteId,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -498,7 +506,10 @@ fun BackupCatalogScreen(
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(text = stringResource(R.string.backup_opt_apk), fontWeight = FontWeight.SemiBold)
-                            Text(text = stringResource(R.string.backup_opt_desc_apk), style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                text = stringResource(R.string.backup_opt_desc_apk),
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
 
@@ -513,8 +524,14 @@ fun BackupCatalogScreen(
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Text(text = "Copia de Datos Privados (run-as)", fontWeight = FontWeight.SemiBold)
-                            Text(text = "Exporta bases de datos SQLite y SharedPreferences de /data/data.", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                text = stringResource(R.string.backup_opt_private_data),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = stringResource(R.string.backup_opt_desc_private_data),
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                 }
@@ -557,7 +574,7 @@ fun BackupCatalogScreen(
             text = { Text(text = dialogoResultadoTexto!!) },
             confirmButton = {
                 TextButton(onClick = { dialogoResultadoTexto = null }) {
-                    Text(text = "Aceptar")
+                    Text(text = stringResource(R.string.btn_accept))
                 }
             }
         )
@@ -644,7 +661,7 @@ fun ItemAppCatalogo(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Apps estándar: botón directo "Copia APK" | Apps debug: botón "Backup" con diálogo de opciones
+            // Apps estándar: botón directo "Copia APK" | Apps debug: botón "Backup" con selector modal
             val textoBoton = if (app.esDepurable) {
                 stringResource(R.string.btn_backup_action)
             } else {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaScannerConnection
 import android.os.Environment
 import android.util.Log
+import com.localadb.manager.R
 import com.localadb.manager.adb.AdbConnectionManager
 import java.io.BufferedOutputStream
 import java.io.File
@@ -114,7 +115,6 @@ object AdbBackupManager {
     /**
      * Extrae todos los splits en un único canal continuo usando 'tar' en shell y
      * transformándolo al vuelo en un contenedor ZIP (.apks) válido en Java.
-     * Cero archivos temporales en disco y cero problemas de Scoped Storage.
      */
     private fun exportarSplitsApks(
         context: Context,
@@ -131,7 +131,6 @@ object AdbBackupManager {
         var partesProcesadas = 0
         var totalBytesEscritos = 0L
 
-        // Argumentos relativos para tar: "base.apk" "split1.apk" "split2.apk" ...
         val baseName = File(rutaBase).name
         val splitNames = rutasSplits.map { File(it).name }
         val fileArgs = (listOf(baseName) + splitNames).joinToString(" ") { "\"$it\"" }
@@ -153,9 +152,8 @@ object AdbBackupManager {
 
                         while (true) {
                             if (!readFully(tarInput, header)) break
-                            if (header[0] == 0.toByte()) break // Fin de archivo TAR (bloque de ceros)
+                            if (header[0] == 0.toByte()) break
 
-                            // Lectura de campos cabecera estándar POSIX TAR (UStar)
                             val rawName = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
                             val sizeStr = String(header, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
                             val fileSize = sizeStr.toLongOrNull(8) ?: 0L
@@ -172,7 +170,6 @@ object AdbBackupManager {
                                 }
                                 zipSalida.closeEntry()
 
-                                // Salto del relleno de alineación a bloque de 512 bytes de TAR
                                 val pad = ((512 - (fileSize % 512)) % 512).toInt()
                                 if (pad > 0) {
                                     skipFully(tarInput, pad.toLong(), buffer)
@@ -204,6 +201,146 @@ object AdbBackupManager {
             ficheroDestino.delete()
             Log.e(ETIQUETA_LOG, "Error al exportar bundle multi-split", e)
             return BackupResult.Failure(e.localizedMessage ?: "Error inesperado al empaquetar el bundle.")
+        }
+    }
+
+    // =========================================================================
+    // HITO 3.4: RESPALDO DE DATOS PRIVADOS (APPS EN MODO DEPURACIÓN VÍA RUN-AS)
+    // =========================================================================
+
+    /**
+     * Extrae las bases de datos y preferencias privadas (/data/data/<paqueteId>) usando run-as.
+     * Lee el flujo TAR en un solo canal continuo, filtra cachés en memoria y comprime a GZIP (.tar.gz)
+     * terminando de forma determinista con el marcador de fin de archivo TAR (sin cuelgues de socket).
+     */
+    fun exportarDatosPrivados(
+        context: Context,
+        adbManager: AdbConnectionManager,
+        targetPort: Int,
+        app: AppInstalada,
+        onProgreso: (porcentaje: Int, estado: String) -> Unit
+    ): BackupResult {
+
+        if (!app.esDepurable) {
+            return BackupResult.Failure(context.getString(R.string.backup_err_not_debuggable))
+        }
+
+        val directorioDestino = obtenerDirectorioDestino()
+
+        onProgreso(5, "Conectando al demonio ADB...")
+        val conexionOk = adbManager.connectDevice("127.0.0.1", targetPort)
+        if (!conexionOk) {
+            return BackupResult.Failure("No se pudo conectar a ADB en el puerto $targetPort. Activa la depuración Wi-Fi.")
+        }
+
+        val nombreSanitizado = sanitizarNombreFichero(app.nombreVisible)
+        val identificador = app.paqueteId
+        val version = app.versionNombre.replace('/', '_')
+        val ficheroSalida = File(directorioDestino, "${nombreSanitizado}_${identificador}_v${version}_datos_privados.tar.gz")
+
+        try {
+            onProgreso(20, context.getString(R.string.backup_status_extracting_data, app.nombreVisible))
+
+            // run-as se posiciona automáticamente en el directorio de la app y ejecuta tar directamente
+            val comandoRunAs = "exec:run-as $identificador tar -cf - ."
+            val canalAdb = adbManager.abrirCanalRobusto(comandoRunAs)
+            val tarInput = canalAdb.openInputStream()
+
+            var totalBytesLeidos = 0L
+
+            FileOutputStream(ficheroSalida).use { fos ->
+                BufferedOutputStream(fos, BUFFER_SIZE).use { bos ->
+                    GZIPOutputStream(bos).use { gzipSalida ->
+                        val header = ByteArray(512)
+                        val buffer = ByteArray(BUFFER_SIZE)
+
+                        while (true) {
+                            if (!readFully(tarInput, header)) break
+
+                            // 1. Verificación de error de run-as en el primer bloque
+                            if (totalBytesLeidos == 0L) {
+                                val primerBloqueTexto = String(header, 0, 100, Charsets.UTF_8).trim()
+                                if (primerBloqueTexto.startsWith("run-as:", ignoreCase = true) ||
+                                    primerBloqueTexto.contains("not debuggable", ignoreCase = true) ||
+                                    primerBloqueTexto.contains("package unknown", ignoreCase = true)
+                                ) {
+                                    throw Exception("Fallo en run-as: $primerBloqueTexto")
+                                }
+                            }
+
+                            // 2. Comprobar si hemos alcanzado el bloque de cierre del TAR (512 ceros)
+                            if (header[0] == 0.toByte()) {
+                                // Escribimos los dos bloques de 512 ceros que marcan el final estándar de TAR
+                                val zeroBlock = ByteArray(512)
+                                gzipSalida.write(zeroBlock)
+                                gzipSalida.write(zeroBlock)
+                                break // Salida inmediata y limpia: el archivo ha terminado por completo
+                            }
+
+                            // 3. Lectura de cabecera POSIX TAR
+                            val rawName = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
+                            val sizeStr = String(header, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+                            val fileSize = sizeStr.toLongOrNull(8) ?: 0L
+                            val pad = ((512 - (fileSize % 512)) % 512).toInt()
+
+                            // Filtramos carpetas de caché volátiles (cache/ y code_cache/)
+                            val esCache = rawName == "./cache" || rawName.startsWith("./cache/") ||
+                                          rawName == "./code_cache" || rawName.startsWith("./code_cache/") ||
+                                          rawName == "cache" || rawName.startsWith("cache/") ||
+                                          rawName == "code_cache" || rawName.startsWith("code_cache/")
+
+                            if (esCache) {
+                                if (fileSize > 0) skipFully(tarInput, fileSize, buffer)
+                                if (pad > 0) skipFully(tarInput, pad.toLong(), buffer)
+                            } else {
+                                gzipSalida.write(header, 0, 512)
+                                totalBytesLeidos += 512
+
+                                if (fileSize > 0) {
+                                    val entryName = File(rawName).name
+                                    val kb = totalBytesLeidos / 1024
+                                    onProgreso(
+                                        50,
+                                        context.getString(R.string.backup_status_compressing_data, kb) + " ($entryName)"
+                                    )
+
+                                    copyExact(tarInput, gzipSalida, fileSize, buffer) { bytes ->
+                                        totalBytesLeidos += bytes
+                                    }
+                                }
+
+                                if (pad > 0) {
+                                    copyExact(tarInput, gzipSalida, pad.toLong(), buffer) { bytes ->
+                                        totalBytesLeidos += bytes
+                                    }
+                                }
+                            }
+                        }
+                        gzipSalida.finish()
+                        gzipSalida.flush()
+                    }
+                }
+            }
+            tarInput.close()
+            canalAdb.close()
+
+            prepararFicheroParaUsuario(context, adbManager, ficheroSalida)
+
+            return if (ficheroSalida.exists() && ficheroSalida.length() > 64 && totalBytesLeidos >= 512) {
+                onProgreso(100, "¡Copia de datos privados finalizada!")
+                Log.i(ETIQUETA_LOG, "Datos privados respaldados: ${ficheroSalida.absolutePath} (${ficheroSalida.length()} bytes)")
+                BackupResult.Success(ficheroSalida.absolutePath, ficheroSalida.length())
+            } else {
+                ficheroSalida.delete()
+                BackupResult.Failure(context.getString(R.string.backup_err_no_data))
+            }
+
+        } catch (e: Exception) {
+            ficheroSalida.delete()
+            Log.e(ETIQUETA_LOG, "Error al respaldar datos privados con run-as", e)
+            return BackupResult.Failure(e.localizedMessage ?: "Fallo durante la ejecución de run-as.")
+        } finally {
+            adbManager.disconnectDevice()
         }
     }
 
@@ -246,83 +383,6 @@ object AdbBackupManager {
             val read = input.read(buffer, 0, toRead)
             if (read == -1) break
             remaining -= read
-        }
-    }
-
-    // =========================================================================
-    // RESPALDO DE DATOS PRIVADOS (APPS EN MODO DEPURACIÓN VÍA RUN-AS)
-    // =========================================================================
-
-    /**
-     * Extrae las bases de datos y preferencias privadas (/data/data/<paqueteId>) usando run-as.
-     */
-    fun exportarDatosPrivados(
-        context: Context,
-        adbManager: AdbConnectionManager,
-        targetPort: Int,
-        app: AppInstalada,
-        onProgreso: (porcentaje: Int, estado: String) -> Unit
-    ): BackupResult {
-
-        if (!app.esDepurable) {
-            return BackupResult.Failure("Android solo permite extraer datos privados de apps compiladas en modo depuración (debuggable).")
-        }
-
-        val directorioDestino = obtenerDirectorioDestino()
-
-        onProgreso(5, "Conectando al demonio ADB...")
-        val conexionOk = adbManager.connectDevice("127.0.0.1", targetPort)
-        if (!conexionOk) {
-            return BackupResult.Failure("No se pudo conectar a ADB en el puerto $targetPort.")
-        }
-
-        val nombreSanitizado = sanitizarNombreFichero(app.nombreVisible)
-        val identificador = app.paqueteId
-        val version = app.versionNombre.replace('/', '_')
-        val ficheroSalida = File(directorioDestino, "${nombreSanitizado}_${identificador}_v${version}_datos_privados.tar.gz")
-
-        try {
-            onProgreso(25, "Extrayendo base de datos y preferencias con run-as...")
-
-            val comandoRunAs = "exec:run-as $identificador sh -c \"cd /data/data/$identificador && tar -cf - .\""
-            val canalAdb = adbManager.abrirCanalRobusto(comandoRunAs)
-            val entradaAdb: InputStream = canalAdb.openInputStream()
-
-            var totalBytesLeidos = 0L
-
-            FileOutputStream(ficheroSalida).use { fos ->
-                BufferedOutputStream(fos, BUFFER_SIZE).use { bos ->
-                    GZIPOutputStream(bos).use { gzipSalida ->
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        var leidos: Int
-                        while (entradaAdb.read(buffer).also { leidos = it } != -1) {
-                            gzipSalida.write(buffer, 0, leidos)
-                            totalBytesLeidos += leidos
-                            onProgreso(60, "Comprimiendo datos privados (${totalBytesLeidos / 1024} KB)...")
-                        }
-                        gzipSalida.flush()
-                    }
-                }
-            }
-            entradaAdb.close()
-            canalAdb.close()
-
-            prepararFicheroParaUsuario(context, adbManager, ficheroSalida)
-
-            return if (ficheroSalida.exists() && ficheroSalida.length() > 0) {
-                onProgreso(100, "¡Copia de datos privados finalizada!")
-                BackupResult.Success(ficheroSalida.absolutePath, ficheroSalida.length())
-            } else {
-                ficheroSalida.delete()
-                BackupResult.Failure("No se pudieron extraer datos (la app no tiene datos guardados o run-as falló).")
-            }
-
-        } catch (e: Exception) {
-            Log.e(ETIQUETA_LOG, "Error al respaldar datos privados con run-as", e)
-            ficheroSalida.delete()
-            return BackupResult.Failure(e.localizedMessage ?: "Fallo durante la ejecución de run-as.")
-        } finally {
-            adbManager.disconnectDevice()
         }
     }
 
