@@ -21,7 +21,7 @@ import java.util.Date
 
 /**
  * Gestor de conexión y emparejamiento ADB local (127.0.0.1).
- * Implementa AbsAdbConnectionManager para autenticación TLS, pairing y canales de streaming.
+ * Implementa AbsAdbConnectionManager con captura garantizada de stdout y stderr (2>&1).
  */
 class AdbConnectionManager private constructor(private val context: Context) : AbsAdbConnectionManager() {
 
@@ -80,7 +80,6 @@ class AdbConnectionManager private constructor(private val context: Context) : A
             }
         }
 
-        // Generar nuevo par RSA 2048 y Certificado X.509 auto-firmado
         try {
             val kpg = KeyPairGenerator.getInstance("RSA")
             kpg.initialize(2048)
@@ -88,7 +87,7 @@ class AdbConnectionManager private constructor(private val context: Context) : A
 
             val now = System.currentTimeMillis()
             val notBefore = Date(now - 1000L * 60 * 60 * 24)
-            val notAfter = Date(now + 1000L * 60 * 60 * 24 * 365 * 10) // 10 años de validez
+            val notAfter = Date(now + 1000L * 60 * 60 * 24 * 365 * 10)
 
             val issuer = X500Name("CN=LocalAdbManager")
             val serial = BigInteger.valueOf(now)
@@ -116,19 +115,10 @@ class AdbConnectionManager private constructor(private val context: Context) : A
         }
     }
 
-    /**
-     * Empareja el dispositivo mediante el protocolo ADB TLS Pairing (puerto y código de 6 dígitos).
-     */
     fun pairDevice(host: String = "127.0.0.1", port: Int, code: String): Boolean {
-        if (port !in 1024..65535) {
-            Log.e(TAG, "Puerto de emparejamiento fuera de rango: $port")
-            return false
-        }
+        if (port !in 1024..65535) return false
         val sanitizedCode = code.trim()
-        if (sanitizedCode.length != 6 || !sanitizedCode.all { it.isDigit() }) {
-            Log.e(TAG, "Código de emparejamiento inválido: $sanitizedCode")
-            return false
-        }
+        if (sanitizedCode.length != 6 || !sanitizedCode.all { it.isDigit() }) return false
 
         return try {
             Log.i(TAG, "Iniciando emparejamiento TLS con $host:$port...")
@@ -141,14 +131,13 @@ class AdbConnectionManager private constructor(private val context: Context) : A
         }
     }
 
-    /**
-     * Conecta al demonio ADB local (127.0.0.1:targetPort).
-     */
     fun connectDevice(host: String = "127.0.0.1", port: Int): Boolean {
         disconnectDevice()
         return try {
             Log.i(TAG, "Conectando a ADB en $host:$port...")
             connect(host, port)
+            Log.i(TAG, "Conectado a ADB en $host:$port")
+            true
         } catch (e: Exception) {
             Log.e(TAG, "Error al conectar a ADB en $host:$port", e)
             disconnectDevice()
@@ -164,25 +153,33 @@ class AdbConnectionManager private constructor(private val context: Context) : A
         }
     }
 
-    /**
-     * Abre un canal ADB para streaming bidireccional (exec/shell).
-     */
     fun abrirCanalRobusto(command: String): AdbStream {
         return openStream(command)
     }
 
     /**
-     * Ejecuta un comando único y devuelve su salida en texto plano.
+     * Ejecuta una orden en la shell de ADB capturando tanto STDOUT como STDERR (2>&1)
+     * para evitar que los fallos del sistema cierren el flujo silenciosamente con 'Stream closed'.
      */
     fun executeCommand(command: String): String {
         return try {
-            val stream = openStream("exec:$command")
+            // Forzamos redirección de errores a la salida estándar para capturar mensajes de fallo
+            val comandoConRedireccion = if (command.contains("2>&1")) command else "$command 2>&1"
+            val stream = openStream("exec:$comandoConRedireccion")
             val output = StringBuilder()
             val input = stream.openInputStream()
             val buffer = ByteArray(1024)
             var bytesRead: Int
-            while (input.read(buffer).also { bytesRead = it } != -1) {
-                output.append(String(buffer, 0, bytesRead, Charsets.UTF_8))
+
+            try {
+                while (input.read(buffer).also { bytesRead = it } != -1) {
+                    output.append(String(buffer, 0, bytesRead, Charsets.UTF_8))
+                }
+            } catch (e: Exception) {
+                // Si ya teníamos texto leído antes del cierre del canal, lo preservamos
+                if (output.isEmpty()) {
+                    throw e
+                }
             }
             stream.close()
             output.toString()

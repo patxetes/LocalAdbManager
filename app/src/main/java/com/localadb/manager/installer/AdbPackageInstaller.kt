@@ -2,18 +2,12 @@ package com.localadb.manager.installer
 
 import android.content.Context
 import android.net.Uri
-import android.os.Build
+import android.provider.OpenableColumns
 import android.util.Log
 import com.localadb.manager.adb.AdbConnectionManager
-import java.io.BufferedReader
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.io.InputStream
-import java.io.InputStreamReader
 import java.io.OutputStream
-import java.util.regex.Pattern
-import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 
 sealed class InstallResult {
     object Success : InstallResult()
@@ -21,13 +15,13 @@ sealed class InstallResult {
 }
 
 /**
- * Motor de instalación en streaming mediante sesiones de PackageInstaller.
- * Gestiona el ciclo de vida del canal ADB con reintentos y tolerancia a retardos del sistema.
+ * Motor de instalación de aplicaciones en streaming mediante sesiones nativas de PackageInstaller por ADB.
+ * Optimizado para Android 14–17 (soporte de cmd package con tamaño exacto -S y commit directo).
  */
 object AdbPackageInstaller {
 
-    private const val ETIQUETA_LOG = "AdbPackageInstaller"
-    private const val TAMANO_BUFFER = 64 * 1024 // 64 KB
+    private const val TAG = "AdbPackageInstaller"
+    private const val BUFFER_SIZE = 64 * 1024 // 64 KB
 
     fun install(
         context: Context,
@@ -38,224 +32,246 @@ object AdbPackageInstaller {
         onProgress: (percent: Int, status: String) -> Unit
     ): InstallResult {
 
-        val stagingDir = File(context.cacheDir, "install_staging")
-        limpiarDirectorio(stagingDir)
-        stagingDir.mkdirs()
-
-        // 1. Conexión limpia y aislada para esta instalación
-        onProgress(2, "Conectando al demonio local ADB...")
-        val conexionOk = adbManager.connectDevice("127.0.0.1", targetPort)
-        if (!conexionOk) {
-            return InstallResult.Failure("No se pudo conectar a ADB en el puerto $targetPort. Comprueba que la depuración Wi-Fi esté activa.")
+        onProgress(5, "Conectando al demonio ADB local (127.0.0.1:$targetPort)...")
+        val conectado = adbManager.connectDevice("127.0.0.1", targetPort)
+        if (!conectado) {
+            return InstallResult.Failure("No se pudo conectar a ADB en 127.0.0.1:$targetPort. Verifica que la depuración inalámbrica esté activa y el puerto sincronizado.")
         }
 
+        val totalBytes = resolveFileSize(context, apkUri)
+        var sessionId: Int? = null
+
         try {
-            val archivosAInstalar = mutableListOf<File>()
+            onProgress(15, "Creando sesión de instalación en Android...")
 
+            // 1. Crear sesión de PackageInstaller adaptada a Android 17
+            val (creadoId, errorDetalle) = crearSesionConDiagnostico(adbManager, totalBytes)
+            if (creadoId == null) {
+                return InstallResult.Failure("Fallo al crear sesión de instalación en Android:\n\n$errorDetalle")
+            }
+            sessionId = creadoId
+            Log.i(TAG, "Sesión de instalación creada con ID: $sessionId")
+
+            // 2. Transmisión de binarios (Monolítico o Splits)
             if (bundleAnalysis.isBundle) {
-                onProgress(8, "Extrayendo fragmentos del contenedor...")
-                val splits = extraerSplitsConZipFile(context, apkUri, stagingDir)
-                if (splits.isEmpty()) {
-                    return InstallResult.Failure("No se encontraron APKs compatibles en el contenedor.")
+                val (exitoSplits, errorSplits) = transmitirSplits(context, adbManager, sessionId, apkUri, bundleAnalysis, totalBytes, onProgress)
+                if (!exitoSplits) {
+                    abandonarSesion(adbManager, sessionId)
+                    return InstallResult.Failure("Error al transmitir los fragmentos a la sesión $sessionId:\n\n$errorSplits")
                 }
-                archivosAInstalar.addAll(splits)
             } else {
-                onProgress(8, "Preparando archivo APK...")
-                val apkUnico = File(stagingDir, "base.apk")
-                copiarUriAFichero(context, apkUri, apkUnico)
-                archivosAInstalar.add(apkUnico)
+                val (exitoMonolitico, errorMonolitico) = transmitirMonolitico(context, adbManager, sessionId, apkUri, totalBytes, onProgress)
+                if (!exitoMonolitico) {
+                    abandonarSesion(adbManager, sessionId)
+                    return InstallResult.Failure("Error al transmitir el APK base a la sesión $sessionId:\n\n$errorMonolitico")
+                }
             }
 
-            // 2. Crear sesión en PackageInstaller con tolerancia a esperas
-            onProgress(15, "Iniciando sesión en PackageInstaller...")
-            val sesionId = crearSesionConReintentos(adbManager)
-                ?: return InstallResult.Failure("El gestor de paquetes de Android está ocupado. Inténtalo de nuevo en unos segundos.")
-
-            // 3. Transmitir los fragmentos
-            val resultadoEnvio = transmitirArchivosASesion(
-                adbManager = adbManager,
-                sesionId = sesionId,
-                archivos = archivosAInstalar,
-                onProgress = onProgress
-            )
-
-            if (resultadoEnvio is InstallResult.Failure) {
-                cancelarSesionAdb(adbManager, sesionId)
-                return resultadoEnvio
+            // 3. Confirmar e instalar la sesión
+            onProgress(90, "Confirmando sesión de instalación ($sessionId)...")
+            var respCommit = adbManager.executeCommand("cmd package install-commit $sessionId").trim()
+            if (respCommit.contains("Unknown", ignoreCase = true) || respCommit.contains("Error:", ignoreCase = true)) {
+                respCommit = adbManager.executeCommand("pm install-commit $sessionId").trim()
             }
+            Log.i(TAG, "Respuesta commit sesión $sessionId: $respCommit")
 
-            // 4. Confirmar la sesión
-            onProgress(95, "Validando firmas e instalando en el sistema...")
-            val respuestaCommit = confirmarSesionAdb(adbManager, sesionId)
-
-            return if (respuestaCommit.contains("Success", ignoreCase = true)) {
+            return if (respCommit.contains("Success", ignoreCase = true)) {
+                onProgress(100, "¡Instalación completada!")
                 InstallResult.Success
             } else {
-                InstallResult.Failure(respuestaCommit.ifEmpty { "Error devuelto por el Package Manager al confirmar." })
+                abandonarSesion(adbManager, sessionId)
+                InstallResult.Failure("Android rechazó la instalación:\n\n${respCommit.ifEmpty { "Error desconocido en install-commit" }}")
             }
 
         } catch (e: Exception) {
-            Log.e(ETIQUETA_LOG, "Excepción durante la instalación", e)
-            return InstallResult.Failure(e.localizedMessage ?: "Error inesperado durante la instalación.")
+            Log.e(TAG, "Excepción durante la instalación", e)
+            if (sessionId != null) {
+                abandonarSesion(adbManager, sessionId)
+            }
+            return InstallResult.Failure("Excepción durante la instalación: ${e.localizedMessage}")
         } finally {
-            // Desconectar siempre el socket y borrar temporales de disco
             adbManager.disconnectDevice()
-            limpiarDirectorio(stagingDir)
         }
-    }
-
-    private fun extraerSplitsConZipFile(context: Context, uri: Uri, stagingDir: File): List<File> {
-        val resultado = mutableListOf<File>()
-        val abisDispositivo = Build.SUPPORTED_ABIS
-
-        val ficheroContenedor = File(stagingDir, "origen.tmp")
-        copiarUriAFichero(context, uri, ficheroContenedor)
-
-        try {
-            val zip = ZipFile(ficheroContenedor)
-            val entradas = zip.entries()
-
-            while (entradas.hasMoreElements()) {
-                val entrada = entradas.nextElement()
-                val nombre = entrada.name
-
-                if (nombre.endsWith(".apk", ignoreCase = true)) {
-                    if (esSplitCompatible(nombre, abisDispositivo)) {
-                        val nombreLimpio = File(nombre).name
-                        val destino = File(stagingDir, nombreLimpio)
-
-                        zip.getInputStream(entrada).use { input ->
-                            FileOutputStream(destino).use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-
-                        resultado.add(destino)
-                        Log.d(ETIQUETA_LOG, "Split extraído: $nombreLimpio (${destino.length()} bytes)")
-                    }
-                }
-            }
-            zip.close()
-        } catch (e: Exception) {
-            Log.e(ETIQUETA_LOG, "Error leyendo contenedor con ZipFile", e)
-        } finally {
-            if (ficheroContenedor.exists()) {
-                ficheroContenedor.delete()
-            }
-        }
-
-        return normalizarBaseApk(resultado)
-    }
-
-    private fun normalizarBaseApk(ficheros: List<File>): List<File> {
-        if (ficheros.isEmpty()) return ficheros
-
-        val yaExisteBase = ficheros.firstOrNull { it.name.equals("base.apk", ignoreCase = true) }
-        if (yaExisteBase != null) return ficheros
-
-        val principal = ficheros.firstOrNull { it.name.contains("base", ignoreCase = true) }
-            ?: ficheros.maxByOrNull { it.length() }
-            ?: ficheros.first()
-
-        val destinoBase = File(principal.parentFile, "base.apk")
-        principal.renameTo(destinoBase)
-
-        return ficheros.map { if (it == principal) destinoBase else it }
-    }
-
-    private fun transmitirArchivosASesion(
-        adbManager: AdbConnectionManager,
-        sesionId: String,
-        archivos: List<File>,
-        onProgress: (percent: Int, status: String) -> Unit
-    ): InstallResult {
-        val total = archivos.size
-
-        for ((index, archivo) in archivos.withIndex()) {
-            val tamano = archivo.length()
-            val nombre = archivo.name
-
-            val progreso = 20 + ((index * 70) / total)
-            onProgress(progreso, "Transmitiendo ($index de $total): $nombre...")
-
-            val comando = "exec:pm install-write -S $tamano $sesionId $nombre -"
-            val canalAdb = adbManager.abrirCanalRobusto(comando)
-            val socketOut: OutputStream = canalAdb.openOutputStream()
-
-            FileInputStream(archivo).use { fis ->
-                val buffer = ByteArray(TAMANO_BUFFER)
-                var read: Int
-                while (fis.read(buffer).also { read = it } != -1) {
-                    socketOut.write(buffer, 0, read)
-                }
-            }
-
-            socketOut.flush()
-
-            val reader = BufferedReader(InputStreamReader(canalAdb.openInputStream()))
-            val respuesta = reader.readLine()?.trim() ?: ""
-            canalAdb.close()
-
-            Log.d(ETIQUETA_LOG, "Escrito $nombre ($tamano bytes) -> Respuesta: $respuesta")
-
-            if (!respuesta.contains("Success", ignoreCase = true)) {
-                return InstallResult.Failure("Fallo al escribir [$nombre]: $respuesta")
-            }
-
-            // Pausa de 120 ms para asegurar que el kernel de Android complete el vaciado del socket
-            Thread.sleep(120)
-        }
-        return InstallResult.Success
     }
 
     /**
-     * Intenta crear la sesión con reintentos para evitar bloqueos si el sistema está cerrando un paquete anterior.
+     * Crea la sesión de instalación probando flags con 'cmd package' y preasignación de tamaño.
      */
-    private fun crearSesionConReintentos(adbManager: AdbConnectionManager): String? {
-        val comando = "pm install-create -r -t -d"
-        val patron = Pattern.compile("\\[(\\d+)\\]")
+    private fun crearSesionConDiagnostico(adbManager: AdbConnectionManager, totalBytes: Long): Pair<Int?, String> {
+        val sizeParam = if (totalBytes > 0) "-S $totalBytes" else ""
 
-        for (intento in 1..3) {
-            val respuesta = adbManager.executeCommand(comando)
-            val matcher = patron.matcher(respuesta)
-            if (matcher.find()) {
-                return matcher.group(1)
+        val comandosAProbar = listOf(
+            "cmd package install-create -r -t $sizeParam".trim(),
+            "cmd package install-create -r -t",
+            "cmd package install-create -r -t -d $sizeParam".trim(),
+            "cmd package install-create -r",
+            "pm install-create -r -t $sizeParam".trim(),
+            "pm install-create -r -t",
+            "pm install-create -r"
+        )
+
+        val registroRespuestas = StringBuilder()
+
+        for (cmd in comandosAProbar) {
+            val resp = adbManager.executeCommand(cmd).trim()
+            Log.i(TAG, "Probando: '$cmd' -> Salida: '$resp'")
+            val id = extraerSessionId(resp)
+            if (id != null) {
+                return Pair(id, resp)
             }
-            Log.w(ETIQUETA_LOG, "Intento $intento de crear sesión fallido ($respuesta). Esperando 400ms...")
-            Thread.sleep(400)
+            registroRespuestas.appendLine("$cmd -> $resp")
         }
-        return null
+
+        return Pair(null, registroRespuestas.toString().trim())
     }
 
-    private fun confirmarSesionAdb(adbManager: AdbConnectionManager, sesionId: String): String {
-        return adbManager.executeCommand("pm install-commit $sesionId")
+    private fun extraerSessionId(respuesta: String): Int? {
+        val pattern = Regex("""\[(\d+)\]""")
+        val match = pattern.find(respuesta)
+        return match?.groupValues?.get(1)?.toIntOrNull()
     }
 
-    private fun cancelarSesionAdb(adbManager: AdbConnectionManager, sesionId: String) {
+    private fun transmitirMonolitico(
+        context: Context,
+        adbManager: AdbConnectionManager,
+        sessionId: Int,
+        apkUri: Uri,
+        totalBytes: Long,
+        onProgress: (Int, String) -> Unit
+    ): Pair<Boolean, String> {
+        val sizeArg = if (totalBytes > 0) "-S $totalBytes" else ""
+        val cmd = "cmd package install-write $sizeArg $sessionId base.apk -"
+        Log.i(TAG, "Abriendo canal de escritura: $cmd")
+
+        val canal = try {
+            adbManager.abrirCanalRobusto("exec:$cmd")
+        } catch (e: Exception) {
+            try {
+                adbManager.abrirCanalRobusto("exec:pm install-write $sizeArg $sessionId base.apk -")
+            } catch (ex: Exception) {
+                return Pair(false, "No se pudo abrir el canal ADB para install-write: ${ex.localizedMessage}")
+            }
+        }
+
+        val input: InputStream = context.contentResolver.openInputStream(apkUri)
+            ?: return Pair(false, "No se pudo leer el archivo APK seleccionado.")
+
+        val output: OutputStream = canal.openOutputStream()
+
+        var totalEscrito = 0L
+        val buffer = ByteArray(BUFFER_SIZE)
+
         try {
-            adbManager.executeCommand("pm install-abandon $sesionId")
-        } catch (_: Exception) {}
-    }
-
-    private fun copiarUriAFichero(context: Context, uri: Uri, destino: File) {
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(destino).use { output ->
-                input.copyTo(output)
+            var leidos: Int
+            while (input.read(buffer).also { leidos = it } != -1) {
+                output.write(buffer, 0, leidos)
+                totalEscrito += leidos
+                if (totalBytes > 0) {
+                    val pct = (20 + (totalEscrito * 65 / totalBytes)).toInt().coerceIn(20, 85)
+                    onProgress(pct, "Transmitiendo APK (${totalEscrito / (1024 * 1024)} MB)...")
+                }
             }
+            output.flush()
+            output.close()
+            input.close()
+            canal.close()
+            return Pair(true, "")
+        } catch (e: Exception) {
+            Log.e(TAG, "Fallo transmitiendo APK monolítico", e)
+            return Pair(false, e.localizedMessage ?: e.toString())
         }
     }
 
-    private fun limpiarDirectorio(dir: File) {
-        if (dir.exists() && dir.isDirectory) {
-            dir.listFiles()?.forEach { it.delete() }
+    private fun transmitirSplits(
+        context: Context,
+        adbManager: AdbConnectionManager,
+        sessionId: Int,
+        apkUri: Uri,
+        bundleAnalysis: BundleAnalysisResult,
+        totalBytes: Long,
+        onProgress: (Int, String) -> Unit
+    ): Pair<Boolean, String> {
+        val rawInput = context.contentResolver.openInputStream(apkUri)
+            ?: return Pair(false, "No se pudo leer el paquete de splits.")
+
+        var totalEscrito = 0L
+        val nombresCompatibles = bundleAnalysis.compatibleSplits.map { it.toString().substringAfterLast('/') }
+
+        try {
+            ZipInputStream(rawInput).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null) {
+                    val entryName = entry.name
+                    val simpleName = entryName.substringAfterLast('/')
+
+                    val esSplitValido = entryName.endsWith(".apk", ignoreCase = true) && !entry.isDirectory &&
+                                        (nombresCompatibles.isEmpty() || nombresCompatibles.any { it.contains(simpleName) || simpleName.contains(it) } || simpleName == "base.apk")
+
+                    if (esSplitValido) {
+                        val sizeArg = if (entry.size > 0) "-S ${entry.size}" else ""
+                        val cmd = "cmd package install-write $sizeArg $sessionId \"$simpleName\" -"
+                        Log.i(TAG, "Transmitiendo split: $cmd")
+
+                        val canal = try {
+                            adbManager.abrirCanalRobusto("exec:$cmd")
+                        } catch (e: Exception) {
+                            adbManager.abrirCanalRobusto("exec:pm install-write $sizeArg $sessionId \"$simpleName\" -")
+                        }
+
+                        val output: OutputStream = canal.openOutputStream()
+                        val buffer = ByteArray(BUFFER_SIZE)
+
+                        var leidos: Int
+                        while (zip.read(buffer).also { leidos = it } != -1) {
+                            output.write(buffer, 0, leidos)
+                            totalEscrito += leidos
+                            if (totalBytes > 0) {
+                                val pct = (20 + (totalEscrito * 65 / totalBytes)).toInt().coerceIn(20, 85)
+                                onProgress(pct, "Transmitiendo $simpleName...")
+                            }
+                        }
+                        output.flush()
+                        output.close()
+                        canal.close()
+                    }
+                    zip.closeEntry()
+                    entry = zip.nextEntry
+                }
+            }
+            return Pair(true, "")
+        } catch (e: Exception) {
+            Log.e(TAG, "Fallo transmitiendo splits", e)
+            return Pair(false, e.localizedMessage ?: e.toString())
         }
     }
 
-    private fun esSplitCompatible(nombre: String, abisSoportadas: Array<String>): Boolean {
-        val abisConocidas = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-        val minusculas = nombre.lowercase().replace('_', '-')
+    private fun abandonarSesion(adbManager: AdbConnectionManager, sessionId: Int) {
+        try {
+            adbManager.executeCommand("cmd package install-abandon $sessionId")
+        } catch (e: Exception) {
+            try {
+                adbManager.executeCommand("pm install-abandon $sessionId")
+            } catch (ignored: Exception) {}
+        }
+    }
 
-        val abiEncontrada = abisConocidas.firstOrNull { minusculas.contains(it) } ?: return true
-        return abisSoportadas.any { it.lowercase().replace('_', '-') == abiEncontrada }
+    private fun resolveFileSize(context: Context, uri: Uri): Long {
+        return try {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use {
+                it.statSize
+            } ?: 0L
+        } catch (e: Exception) {
+            var size = 0L
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val index = it.getColumnIndex(OpenableColumns.SIZE)
+                    if (index != -1) {
+                        size = it.getLong(index)
+                    }
+                }
+            }
+            size
+        }
     }
 }
