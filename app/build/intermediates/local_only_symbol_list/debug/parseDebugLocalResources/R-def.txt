@@ -14,6 +14,11 @@ string apk_single_detected
 string apk_size
 string apk_splits_detected
 string apk_version
+string apk_version_installed
+string apk_version_status_downgrade
+string apk_version_status_new
+string apk_version_status_same
+string apk_version_status_update
 string app_name
 string backup_badge_debuggable
 string backup_badge_standard
@@ -43,6 +48,7 @@ string btn_change_port
 string btn_connect_adb
 string btn_connect_localhost_5555
 string btn_disconnect_adb
+string btn_force_downgrade
 string btn_install_apk
 string btn_open_dev_settings
 string btn_pair_action
@@ -58,9 +64,12 @@ string btn_show_pairing_notification
 string btn_start_scan
 string btn_stop_scan
 string btn_sync_scan
+string btn_understood
 string btn_usb_setup_guide
 string dialog_manual_connect_desc
 string dialog_split_pairing_hint
+string downgrade_blocked_release_desc
+string downgrade_warning_debug_desc
 string install_status_committing
 string install_status_creating_session
 string install_status_failed
@@ -117,6 +126,8 @@ string tab_installer
 string title_backup_catalog
 string title_backup_options
 string title_crypto_ok
+string title_downgrade_blocked
+string title_downgrade_warning
 string title_installer
 string title_manual_connect_port
 string title_manual_pairing

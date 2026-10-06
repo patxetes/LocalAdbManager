@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -46,6 +48,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -101,6 +104,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// Global application build version tag displayed in the top header
+const val APP_BUILD_TAG = "v1.0.0-beta-Downgrade_Guard"
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var mdnsManager: AdbMdnsManager
@@ -127,12 +133,12 @@ class MainActivity : ComponentActivity() {
                         .systemBarsPadding(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppNavegacionPrincipal(
+                    AppMainNavigation(
                         mdnsManager = mdnsManager,
                         adbManager = adbConnectionManager,
                         initialApkUri = selectedApkUri.value,
                         onOpenSettings = { openDeveloperSettings() },
-                        onLanzarNotificacionEmparejamiento = { port -> lanzarNotificacionEmparejamiento(port) }
+                        onLaunchPairingNotification = { port -> launchPairingNotification(port) }
                     )
                 }
             }
@@ -187,11 +193,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    fun lanzarNotificacionEmparejamiento(pairingPort: Int?) {
+    fun launchPairingNotification(pairingPort: Int?) {
         checkNotificationPermission()
 
         val remoteInput = RemoteInput.Builder(PairingNotificationReceiver.KEY_TEXT_REPLY)
-            .setLabel("Código (ej: 123456 o 'Puerto Código')")
+            .setLabel("Code (e.g. 123456 or 'Port Code')")
             .build()
 
         val intent = Intent(this, PairingNotificationReceiver::class.java).apply {
@@ -229,15 +235,15 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * Contenedor principal con cabecera de control ADB y navegación gestual por pestañas.
+ * Main application navigation container featuring gesture swiping, global header, and build version tag.
  */
 @Composable
-fun AppNavegacionPrincipal(
+fun AppMainNavigation(
     mdnsManager: AdbMdnsManager,
     adbManager: AdbConnectionManager,
     initialApkUri: Uri?,
     onOpenSettings: () -> Unit,
-    onLanzarNotificacionEmparejamiento: (Int?) -> Unit
+    onLaunchPairingNotification: (Int?) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -269,7 +275,7 @@ fun AppNavegacionPrincipal(
         }
     }
 
-    fun reiniciarEscanerMdns() {
+    fun restartMdnsDiscovery() {
         connectPort = null
         pairingPort = null
         mdnsManager.stopDiscovery()
@@ -286,9 +292,7 @@ fun AppNavegacionPrincipal(
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        // =====================================================================
-        // CABECERA GLOBAL: ESTADO ADB, SINCRONIZACIÓN Y ACCIONES RÁPIDAS
-        // =====================================================================
+        // Global header card showing app title, build version tag, connection status, and quick action buttons
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -297,12 +301,41 @@ fun AppNavegacionPrincipal(
             shape = RoundedCornerShape(10.dp)
         ) {
             Column(modifier = Modifier.padding(10.dp)) {
+                // Header row 1: Application Title and Visible Build Version Tag
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val textoPuerto = if (effectiveConnectPort != null) {
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = APP_BUILD_TAG,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Header row 2: Connection port and action buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val portText = if (effectiveConnectPort != null) {
                         stringResource(R.string.mdns_service_connect_found, effectiveConnectPort)
                     } else {
                         stringResource(R.string.mdns_service_not_found)
@@ -315,7 +348,7 @@ fun AppNavegacionPrincipal(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = textoPuerto,
+                            text = portText,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
                             color = if (effectiveConnectPort != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
@@ -326,24 +359,24 @@ fun AppNavegacionPrincipal(
 
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         OutlinedButton(
-                            onClick = { reiniciarEscanerMdns() },
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                            onClick = { restartMdnsDiscovery() },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Text(text = stringResource(R.string.btn_sync_scan), fontSize = 10.sp)
+                            Text(text = stringResource(R.string.btn_sync_scan), fontSize = 11.sp)
                         }
 
                         Button(
                             onClick = { showPairingMethodDialog = true },
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Text(text = stringResource(R.string.btn_pair_action), fontSize = 10.sp)
+                            Text(text = stringResource(R.string.btn_pair_action), fontSize = 11.sp)
                         }
 
                         OutlinedButton(
-                            onClick = { showUsbSetupDialog = true },
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                            onClick = onOpenSettings,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Text(text = "USB", fontSize = 10.sp)
+                            Text(text = stringResource(R.string.btn_open_dev_settings), fontSize = 11.sp)
                         }
                     }
                 }
@@ -374,8 +407,8 @@ fun AppNavegacionPrincipal(
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize()
-        ) { pagina ->
-            when (pagina) {
+        ) { page ->
+            when (page) {
                 0 -> InstallerScreen(
                     adbManager = adbManager,
                     connectPort = effectiveConnectPort,
@@ -393,9 +426,7 @@ fun AppNavegacionPrincipal(
         }
     }
 
-    // =========================================================================
-    // DIÁLOGO 1: SELECTOR DE MÉTODO DE EMPAREJAMIENTO
-    // =========================================================================
+    // Dialog 1: Pairing method selector (Notification vs Split Screen)
     if (showPairingMethodDialog) {
         AlertDialog(
             onDismissRequest = { showPairingMethodDialog = false },
@@ -414,7 +445,7 @@ fun AppNavegacionPrincipal(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                onLanzarNotificacionEmparejamiento(pairingPort)
+                                onLaunchPairingNotification(pairingPort)
                                 onOpenSettings()
                                 showPairingMethodDialog = false
                             },
@@ -455,9 +486,7 @@ fun AppNavegacionPrincipal(
         )
     }
 
-    // =========================================================================
-    // DIÁLOGO 2: VINCULACIÓN COMPACTA PARA PANTALLA DIVIDIDA
-    // =========================================================================
+    // Dialog 2: Ultra-compact pairing input for Split Screen
     if (showSplitScreenPairingDialog) {
         var inputPort by remember { mutableStateOf(pairingPort?.toString() ?: "") }
         var inputCode by remember { mutableStateOf("") }
@@ -480,7 +509,7 @@ fun AppNavegacionPrincipal(
                         onValueChange = { if (it.length <= 5 && it.all { c -> c.isDigit() }) inputPort = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text(stringResource(R.string.label_pairing_port)) },
-                        placeholder = { Text("Ej: 41235") },
+                        placeholder = { Text("e.g. 41235") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                     )
@@ -492,7 +521,7 @@ fun AppNavegacionPrincipal(
                         onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) inputCode = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text(stringResource(R.string.label_pairing_code)) },
-                        placeholder = { Text("6 dígitos") },
+                        placeholder = { Text("6 digits") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                     )
@@ -521,10 +550,10 @@ fun AppNavegacionPrincipal(
                             isPairingLoading = false
                             showSplitScreenPairingDialog = false
                             dialogPairingResultText = if (ok) {
-                                reiniciarEscanerMdns()
+                                restartMdnsDiscovery()
                                 context.getString(R.string.pairing_success)
                             } else {
-                                context.getString(R.string.pairing_failed, "Código o puerto rechazado. Asegúrate de tener la ventana de Ajustes visible.")
+                                context.getString(R.string.pairing_failed, "Port or code rejected. Ensure the Settings pairing window is visible.")
                             }
                         }
                     }
@@ -543,9 +572,7 @@ fun AppNavegacionPrincipal(
         )
     }
 
-    // =========================================================================
-    // DIÁLOGO DE GUÍA Y CONEXIÓN USB (STANDALONE)
-    // =========================================================================
+    // Dialog 3: USB TCP/IP setup guidance
     if (showUsbSetupDialog) {
         AlertDialog(
             onDismissRequest = { showUsbSetupDialog = false },
@@ -580,9 +607,7 @@ fun AppNavegacionPrincipal(
         )
     }
 
-    // =========================================================================
-    // DIÁLOGO PARA MODIFICAR EL PUERTO DE CONEXIÓN MANUALMENTE
-    // =========================================================================
+    // Dialog 4: Manual connection port override
     if (showManualConnectDialog) {
         var inputConnectPort by remember { mutableStateOf(effectiveConnectPort?.toString() ?: "") }
 
@@ -604,7 +629,7 @@ fun AppNavegacionPrincipal(
                         onValueChange = { if (it.length <= 5 && it.all { c -> c.isDigit() }) inputConnectPort = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text(stringResource(R.string.label_connect_port)) },
-                        placeholder = { Text("Ej: 39541") },
+                        placeholder = { Text("e.g. 39541") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                     )
@@ -647,7 +672,7 @@ fun AppNavegacionPrincipal(
 }
 
 /**
- * Pestaña 2: Catálogo de Aplicaciones, Exportación y Motor de Restauración.
+ * Tab 2: Package Catalog, Backup generation, and Restoration pipeline.
  */
 @Composable
 fun BackupCatalogScreen(
@@ -659,268 +684,269 @@ fun BackupCatalogScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var cargando by remember { mutableStateOf(true) }
-    var textoBusqueda by remember { mutableStateOf("") }
-    var listaApps by remember { mutableStateOf<List<AppInstalada>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var searchQuery by remember { mutableStateOf("") }
+    var installedApps by remember { mutableStateOf<List<AppInstalada>>(emptyList()) }
 
-    var appSeleccionadaParaOpciones by remember { mutableStateOf<AppInstalada?>(null) }
-    var lamSeleccionadoParaOpciones by remember { mutableStateOf<Pair<Uri, ManifestLam>?>(null) }
+    var selectedAppForOptions by remember { mutableStateOf<AppInstalada?>(null) }
+    var selectedLamForOptions by remember { mutableStateOf<Pair<Uri, ManifestLam>?>(null) }
 
-    var operacionEnProceso by remember { mutableStateOf<String?>(null) }
-    var tituloDialogoProgreso by remember { mutableStateOf("") }
-    var progresoOperacion by remember { mutableFloatStateOf(0f) }
-    var estadoOperacionTexto by remember { mutableStateOf("") }
-    var dialogoResultadoTexto by remember { mutableStateOf<String?>(null) }
+    var activeOperationName by remember { mutableStateOf<String?>(null) }
+    var progressDialogTitle by remember { mutableStateOf("") }
+    var operationProgress by remember { mutableFloatStateOf(0f) }
+    var operationStatusText by remember { mutableStateOf("") }
+    var resultDialogText by remember { mutableStateOf<String?>(null) }
 
-    fun recargarCatalogo() {
-        cargando = true
+    fun reloadCatalog() {
+        isLoading = true
         Thread {
-            val resultado = PackageCatalogManager.obtenerAplicacionesUsuario(context)
-            listaApps = resultado
-            cargando = false
+            val result = PackageCatalogManager.obtenerAplicacionesUsuario(context)
+            installedApps = result
+            isLoading = false
         }.start()
     }
 
     LaunchedEffect(Unit) {
-        recargarCatalogo()
+        reloadCatalog()
     }
 
-    val appsFiltradas = remember(textoBusqueda, listaApps) {
-        if (textoBusqueda.isBlank()) {
-            listaApps
+    val filteredApps = remember(searchQuery, installedApps) {
+        if (searchQuery.isBlank()) {
+            installedApps
         } else {
-            val query = textoBusqueda.trim().lowercase()
-            listaApps.filter {
+            val query = searchQuery.trim().lowercase()
+            installedApps.filter {
                 it.nombreVisible.lowercase().contains(query) ||
                 it.paqueteId.lowercase().contains(query)
             }
         }
     }
 
-    fun ejecutarBackup(app: AppInstalada, paqueteCompletoLam: Boolean) {
-        appSeleccionadaParaOpciones = null
-        operacionEnProceso = app.nombreVisible
-        tituloDialogoProgreso = context.getString(R.string.backup_dialog_title)
-        progresoOperacion = 0f
-        estadoOperacionTexto = if (paqueteCompletoLam) {
+    fun executeBackup(app: AppInstalada, isFullLamPackage: Boolean) {
+        selectedAppForOptions = null
+        activeOperationName = app.nombreVisible
+        progressDialogTitle = context.getString(R.string.backup_dialog_title)
+        operationProgress = 0f
+        operationStatusText = if (isFullLamPackage) {
             context.getString(R.string.backup_status_creating_lam, app.nombreVisible)
         } else {
             context.getString(R.string.backup_status_extracting, app.nombreVisible)
         }
 
         coroutineScope.launch {
-            var puerto = connectPort
-            if (puerto == null) {
+            var port = connectPort
+            if (port == null) {
                 mdnsManager.startDiscovery(mdnsCallback)
                 for (i in 1..15) {
                     delay(200)
-                    puerto = connectPort
-                    if (puerto != null) break
+                    port = connectPort
+                    if (port != null) break
                 }
             }
 
-            if (puerto == null) {
-                operacionEnProceso = null
-                dialogoResultadoTexto = context.getString(R.string.mdns_service_not_found)
+            if (port == null) {
+                activeOperationName = null
+                resultDialogText = context.getString(R.string.mdns_service_not_found)
                 return@launch
             }
 
-            val resultado = withContext(Dispatchers.IO) {
-                if (paqueteCompletoLam) {
+            val result = withContext(Dispatchers.IO) {
+                if (isFullLamPackage) {
                     AdbBackupManager.exportarPaqueteCompletoLam(
                         context = context,
                         adbManager = adbManager,
-                        targetPort = puerto,
+                        targetPort = port,
                         app = app
                     ) { percent, status ->
-                        progresoOperacion = percent / 100f
-                        estadoOperacionTexto = status
+                        operationProgress = percent / 100f
+                        operationStatusText = status
                     }
                 } else {
                     AdbBackupManager.exportarApk(
                         context = context,
                         adbManager = adbManager,
-                        targetPort = puerto,
+                        targetPort = port,
                         app = app
                     ) { percent, status ->
-                        progresoOperacion = percent / 100f
-                        estadoOperacionTexto = status
+                        operationProgress = percent / 100f
+                        operationStatusText = status
                     }
                 }
             }
 
-            operacionEnProceso = null
-            dialogoResultadoTexto = when (resultado) {
+            activeOperationName = null
+            resultDialogText = when (result) {
                 is BackupResult.Success -> {
-                    val mb = resultado.tamanoBytes / (1024.0 * 1024.0)
-                    val pesoFormateado = if (mb >= 1.0) {
+                    val mb = result.tamanoBytes / (1024.0 * 1024.0)
+                    val formattedWeight = if (mb >= 1.0) {
                         String.format("%.2f MB", mb)
                     } else {
-                        String.format("%.2f KB", resultado.tamanoBytes / 1024.0)
+                        String.format("%.2f KB", result.tamanoBytes / 1024.0)
                     }
-                    context.getString(R.string.backup_status_success, resultado.rutaFichero, pesoFormateado)
+                    context.getString(R.string.backup_status_success, result.rutaFichero, formattedWeight)
                 }
                 is BackupResult.Failure -> {
-                    context.getString(R.string.backup_status_failed, resultado.motivo)
+                    context.getString(R.string.backup_status_failed, result.motivo)
                 }
             }
         }
     }
 
-    fun ejecutarRestauracionLam(uri: Uri, soloApk: Boolean) {
-        val nombreArchivo = AdbRestoreManager.resolverNombreArchivo(context, uri)
+    fun executeLamRestoration(uri: Uri, apkOnly: Boolean) {
+        val fileName = AdbRestoreManager.resolverNombreArchivo(context, uri)
 
         coroutineScope.launch {
-            var puerto = connectPort
-            if (puerto == null) {
+            var port = connectPort
+            if (port == null) {
                 mdnsManager.startDiscovery(mdnsCallback)
                 for (i in 1..15) {
                     delay(200)
-                    puerto = connectPort
-                    if (puerto != null) break
+                    port = connectPort
+                    if (port != null) break
                 }
             }
 
-            if (puerto == null) {
-                dialogoResultadoTexto = context.getString(R.string.mdns_service_not_found)
+            if (port == null) {
+                resultDialogText = context.getString(R.string.mdns_service_not_found)
                 return@launch
             }
 
-            tituloDialogoProgreso = context.getString(R.string.restore_dialog_title)
-            operacionEnProceso = nombreArchivo
-            progresoOperacion = 0f
-            estadoOperacionTexto = context.getString(R.string.restore_status_inspecting_lam)
+            progressDialogTitle = context.getString(R.string.restore_dialog_title)
+            activeOperationName = fileName
+            operationProgress = 0f
+            operationStatusText = context.getString(R.string.restore_status_inspecting_lam)
 
-            val resultado = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 AdbRestoreManager.restaurarPaqueteLam(
                     context = context,
                     adbManager = adbManager,
-                    targetPort = puerto,
+                    targetPort = port,
                     uri = uri,
-                    soloApk = soloApk
+                    soloApk = apkOnly
                 ) { percent, status ->
-                    progresoOperacion = percent / 100f
-                    estadoOperacionTexto = status
+                    operationProgress = percent / 100f
+                    operationStatusText = status
                 }
             }
 
-            operacionEnProceso = null
-            dialogoResultadoTexto = when (resultado) {
+            activeOperationName = null
+            resultDialogText = when (result) {
                 is RestoreResult.Success -> {
                     val manifest = AdbRestoreManager.leerManifestDeLam(context, uri)
-                    val appName = manifest?.appName ?: "Aplicación"
-                    if (soloApk) {
-                        context.getString(R.string.restore_status_apk_only_success, appName, resultado.paqueteId)
+                    val appName = manifest?.appName ?: "App"
+                    if (apkOnly) {
+                        context.getString(R.string.restore_status_apk_only_success, appName, result.paqueteId)
                     } else {
-                        context.getString(R.string.restore_status_lam_success, appName, resultado.paqueteId)
+                        context.getString(R.string.restore_status_lam_success, appName, result.paqueteId)
                     }
                 }
                 is RestoreResult.Failure -> {
-                    context.getString(R.string.restore_status_failed, resultado.motivo)
+                    context.getString(R.string.restore_status_failed, result.motivo)
                 }
             }
-            recargarCatalogo()
+            reloadCatalog()
         }
     }
 
-    fun ejecutarRestauracion(uri: Uri) {
-        val nombreArchivo = AdbRestoreManager.resolverNombreArchivo(context, uri)
+    fun executeRestoration(uri: Uri) {
+        val fileName = AdbRestoreManager.resolverNombreArchivo(context, uri)
 
         coroutineScope.launch {
-            var puerto = connectPort
-            if (puerto == null) {
+            var port = connectPort
+            if (port == null) {
                 mdnsManager.startDiscovery(mdnsCallback)
                 for (i in 1..15) {
                     delay(200)
-                    puerto = connectPort
-                    if (puerto != null) break
+                    port = connectPort
+                    if (port != null) break
                 }
             }
 
-            if (puerto == null) {
-                dialogoResultadoTexto = context.getString(R.string.mdns_service_not_found)
+            if (port == null) {
+                resultDialogText = context.getString(R.string.mdns_service_not_found)
                 return@launch
             }
 
-            if (nombreArchivo.endsWith(".lam", ignoreCase = true)) {
+            if (fileName.endsWith(".lam", ignoreCase = true)) {
                 val manifest = withContext(Dispatchers.IO) {
                     AdbRestoreManager.leerManifestDeLam(context, uri)
                 }
 
                 if (manifest != null && manifest.hasPrivateData) {
-                    lamSeleccionadoParaOpciones = Pair(uri, manifest)
+                    selectedLamForOptions = Pair(uri, manifest)
                 } else {
-                    ejecutarRestauracionLam(uri, soloApk = true)
+                    executeLamRestoration(uri, apkOnly = true)
                 }
-            } else if (nombreArchivo.endsWith(".tar.gz", ignoreCase = true) || nombreArchivo.endsWith(".tgz", ignoreCase = true)) {
-                tituloDialogoProgreso = context.getString(R.string.restore_dialog_title)
-                operacionEnProceso = nombreArchivo
-                progresoOperacion = 0f
-                estadoOperacionTexto = context.getString(R.string.restore_status_preparing, nombreArchivo)
+            } else if (fileName.endsWith(".tar.gz", ignoreCase = true) || fileName.endsWith(".tgz", ignoreCase = true)) {
+                progressDialogTitle = context.getString(R.string.restore_dialog_title)
+                activeOperationName = fileName
+                operationProgress = 0f
+                operationStatusText = context.getString(R.string.restore_status_preparing, fileName)
 
-                val resultado = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.IO) {
                     AdbRestoreManager.restaurarDatosPrivados(
                         context = context,
                         adbManager = adbManager,
-                        targetPort = puerto,
+                        targetPort = port,
                         uri = uri
                     ) { percent, status ->
-                        progresoOperacion = percent / 100f
-                        estadoOperacionTexto = status
+                        operationProgress = percent / 100f
+                        operationStatusText = status
                     }
                 }
 
-                operacionEnProceso = null
-                dialogoResultadoTexto = when (resultado) {
+                activeOperationName = null
+                resultDialogText = when (result) {
                     is RestoreResult.Success -> {
-                        val mb = resultado.tamanoBytes / (1024.0 * 1024.0)
-                        val tamanoFormateado = if (mb >= 1.0) {
+                        val mb = result.tamanoBytes / (1024.0 * 1024.0)
+                        val formattedSize = if (mb >= 1.0) {
                             String.format("%.2f MB", mb)
                         } else {
-                            String.format("%.2f KB", resultado.tamanoBytes / 1024.0)
+                            String.format("%.2f KB", result.tamanoBytes / 1024.0)
                         }
-                        context.getString(R.string.restore_status_success, resultado.paqueteId, tamanoFormateado)
+                        context.getString(R.string.restore_status_success, result.paqueteId, formattedSize)
                     }
                     is RestoreResult.Failure -> {
-                        context.getString(R.string.restore_status_failed, resultado.motivo)
+                        context.getString(R.string.restore_status_failed, result.motivo)
                     }
                 }
-            } else if (nombreArchivo.endsWith(".apk", ignoreCase = true) ||
-                     nombreArchivo.endsWith(".apks", ignoreCase = true) ||
-                     nombreArchivo.endsWith(".xapk", ignoreCase = true) ||
-                     nombreArchivo.endsWith(".zip", ignoreCase = true)) {
+            } else if (fileName.endsWith(".apk", ignoreCase = true) ||
+                     fileName.endsWith(".apks", ignoreCase = true) ||
+                     fileName.endsWith(".xapk", ignoreCase = true) ||
+                     fileName.endsWith(".zip", ignoreCase = true)) {
 
-                tituloDialogoProgreso = context.getString(R.string.title_installer)
-                operacionEnProceso = nombreArchivo
-                progresoOperacion = 0f
-                estadoOperacionTexto = context.getString(R.string.install_status_creating_session)
+                progressDialogTitle = context.getString(R.string.title_installer)
+                activeOperationName = fileName
+                operationProgress = 0f
+                operationStatusText = context.getString(R.string.install_status_creating_session)
 
                 val totalBytes = resolveFileSize(context, uri)
                 val analysis = withContext(Dispatchers.IO) {
                     BundleSplitFilter.inspectAndFilter(context, uri, totalBytes)
                 }
 
-                val resultado = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.IO) {
                     AdbPackageInstaller.install(
                         context = context,
                         adbManager = adbManager,
-                        targetPort = puerto,
+                        targetPort = port,
                         apkUri = uri,
-                        bundleAnalysis = analysis
+                        bundleAnalysis = analysis,
+                        permitirDowngrade = false
                     ) { percent, status ->
-                        progresoOperacion = percent / 100f
-                        estadoOperacionTexto = status
+                        operationProgress = percent / 100f
+                        operationStatusText = status
                     }
                 }
 
-                operacionEnProceso = null
-                dialogoResultadoTexto = when (resultado) {
+                activeOperationName = null
+                resultDialogText = when (result) {
                     is InstallResult.Success -> context.getString(R.string.install_status_success)
-                    is InstallResult.Failure -> context.getString(R.string.install_status_failed, resultado.reason)
+                    is InstallResult.Failure -> context.getString(R.string.install_status_failed, result.reason)
                 }
-                recargarCatalogo()
+                reloadCatalog()
             } else {
-                dialogoResultadoTexto = context.getString(R.string.restore_err_unrecognized_file)
+                resultDialogText = context.getString(R.string.restore_err_unrecognized_file)
             }
         }
     }
@@ -929,7 +955,7 @@ fun BackupCatalogScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            ejecutarRestauracion(uri)
+            executeRestoration(uri)
         }
     }
 
@@ -968,8 +994,8 @@ fun BackupCatalogScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
-            value = textoBusqueda,
-            onValueChange = { textoBusqueda = it },
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text(text = stringResource(R.string.backup_search_hint)) },
             singleLine = true,
@@ -984,19 +1010,19 @@ fun BackupCatalogScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = stringResource(R.string.backup_total_apps, appsFiltradas.size),
+                text = stringResource(R.string.backup_total_apps, filteredApps.size),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            OutlinedButton(onClick = { recargarCatalogo() }) {
+            OutlinedButton(onClick = { reloadCatalog() }) {
                 Text(text = stringResource(R.string.btn_refresh_catalog))
             }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        if (cargando) {
+        if (isLoading) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -1007,7 +1033,7 @@ fun BackupCatalogScreen(
                     Text(text = stringResource(R.string.backup_loading_apps), style = MaterialTheme.typography.bodyMedium)
                 }
             }
-        } else if (appsFiltradas.isEmpty()) {
+        } else if (filteredApps.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -1023,22 +1049,22 @@ fun BackupCatalogScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(appsFiltradas, key = { it.paqueteId }) { app ->
-                    ItemAppCatalogo(
+                items(filteredApps, key = { it.paqueteId }) { app ->
+                    ItemAppCatalog(
                         app = app,
-                        estaEnProgreso = operacionEnProceso != null,
-                        onCopiaDirectaApk = { ejecutarBackup(app, paqueteCompletoLam = false) },
-                        onAbrirOpciones = { appSeleccionadaParaOpciones = app }
+                        isBusy = activeOperationName != null,
+                        onDirectApkCopy = { executeBackup(app, isFullLamPackage = false) },
+                        onOpenOptions = { selectedAppForOptions = app }
                     )
                 }
             }
         }
     }
 
-    if (appSeleccionadaParaOpciones != null) {
-        val app = appSeleccionadaParaOpciones!!
+    if (selectedAppForOptions != null) {
+        val app = selectedAppForOptions!!
         AlertDialog(
-            onDismissRequest = { appSeleccionadaParaOpciones = null },
+            onDismissRequest = { selectedAppForOptions = null },
             title = { Text(text = stringResource(R.string.title_backup_options)) },
             text = {
                 Column {
@@ -1054,7 +1080,7 @@ fun BackupCatalogScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { ejecutarBackup(app, paqueteCompletoLam = false) },
+                            .clickable { executeBackup(app, isFullLamPackage = false) },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -1072,7 +1098,7 @@ fun BackupCatalogScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { ejecutarBackup(app, paqueteCompletoLam = true) },
+                            .clickable { executeBackup(app, isFullLamPackage = true) },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -1091,17 +1117,17 @@ fun BackupCatalogScreen(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { appSeleccionadaParaOpciones = null }) {
+                TextButton(onClick = { selectedAppForOptions = null }) {
                     Text(text = stringResource(R.string.btn_cancel))
                 }
             }
         )
     }
 
-    if (lamSeleccionadoParaOpciones != null) {
-        val (uri, manifest) = lamSeleccionadoParaOpciones!!
+    if (selectedLamForOptions != null) {
+        val (uri, manifest) = selectedLamForOptions!!
         AlertDialog(
-            onDismissRequest = { lamSeleccionadoParaOpciones = null },
+            onDismissRequest = { selectedLamForOptions = null },
             title = { Text(text = stringResource(R.string.title_restore_options)) },
             text = {
                 Column {
@@ -1119,8 +1145,8 @@ fun BackupCatalogScreen(
                             .fillMaxWidth()
                             .clickable {
                                 val targetUri = uri
-                                lamSeleccionadoParaOpciones = null
-                                ejecutarRestauracionLam(targetUri, soloApk = true)
+                                selectedLamForOptions = null
+                                executeLamRestoration(targetUri, apkOnly = true)
                             },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
@@ -1141,8 +1167,8 @@ fun BackupCatalogScreen(
                             .fillMaxWidth()
                             .clickable {
                                 val targetUri = uri
-                                lamSeleccionadoParaOpciones = null
-                                ejecutarRestauracionLam(targetUri, soloApk = false)
+                                selectedLamForOptions = null
+                                executeLamRestoration(targetUri, apkOnly = false)
                             },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
@@ -1159,40 +1185,40 @@ fun BackupCatalogScreen(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { lamSeleccionadoParaOpciones = null }) {
+                TextButton(onClick = { selectedLamForOptions = null }) {
                     Text(text = stringResource(R.string.btn_cancel))
                 }
             }
         )
     }
 
-    if (operacionEnProceso != null) {
+    if (activeOperationName != null) {
         AlertDialog(
             onDismissRequest = {},
-            title = { Text(text = tituloDialogoProgreso) },
+            title = { Text(text = progressDialogTitle) },
             text = {
                 Column {
-                    Text(text = operacionEnProceso!!, fontWeight = FontWeight.Bold)
+                    Text(text = activeOperationName!!, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(12.dp))
                     LinearProgressIndicator(
-                        progress = { progresoOperacion },
+                        progress = { operationProgress },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = estadoOperacionTexto, style = MaterialTheme.typography.bodySmall)
+                    Text(text = operationStatusText, style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {}
         )
     }
 
-    if (dialogoResultadoTexto != null) {
+    if (resultDialogText != null) {
         AlertDialog(
-            onDismissRequest = { dialogoResultadoTexto = null },
+            onDismissRequest = { resultDialogText = null },
             title = { Text(text = stringResource(R.string.backup_dialog_result_title)) },
-            text = { Text(text = dialogoResultadoTexto!!) },
+            text = { Text(text = resultDialogText!!) },
             confirmButton = {
-                TextButton(onClick = { dialogoResultadoTexto = null }) {
+                TextButton(onClick = { resultDialogText = null }) {
                     Text(text = stringResource(R.string.btn_accept))
                 }
             }
@@ -1201,11 +1227,11 @@ fun BackupCatalogScreen(
 }
 
 @Composable
-fun ItemAppCatalogo(
+fun ItemAppCatalog(
     app: AppInstalada,
-    estaEnProgreso: Boolean,
-    onCopiaDirectaApk: () -> Unit,
-    onAbrirOpciones: () -> Unit
+    isBusy: Boolean,
+    onDirectApkCopy: () -> Unit,
+    onOpenOptions: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1218,13 +1244,13 @@ fun ItemAppCatalogo(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val bitmapIcono = remember(app.icono) {
-                app.icono?.let { convertirDrawableABitmap(it) }
+            val iconBitmap = remember(app.icono) {
+                app.icono?.let { convertDrawableToBitmap(it) }
             }
 
-            if (bitmapIcono != null) {
+            if (iconBitmap != null) {
                 Image(
-                    bitmap = bitmapIcono.asImageBitmap(),
+                    bitmap = iconBitmap.asImageBitmap(),
                     contentDescription = app.nombreVisible,
                     modifier = Modifier.size(48.dp)
                 )
@@ -1253,9 +1279,9 @@ fun ItemAppCatalogo(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                val colorFondo = if (app.esDepurable) Color(0xFF2E7D32) else MaterialTheme.colorScheme.secondaryContainer
-                val colorTexto = if (app.esDepurable) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
-                val textoInsignia = if (app.esDepurable) {
+                val badgeBgColor = if (app.esDepurable) Color(0xFF2E7D32) else MaterialTheme.colorScheme.secondaryContainer
+                val badgeTextColor = if (app.esDepurable) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
+                val badgeText = if (app.esDepurable) {
                     stringResource(R.string.backup_badge_debuggable)
                 } else {
                     stringResource(R.string.backup_badge_standard)
@@ -1263,42 +1289,45 @@ fun ItemAppCatalogo(
 
                 Box(
                     modifier = Modifier
-                        .background(colorFondo, shape = RoundedCornerShape(6.dp))
+                        .background(badgeBgColor, shape = RoundedCornerShape(6.dp))
                         .padding(horizontal = 8.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = textoInsignia,
+                        text = badgeText,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
-                        color = colorTexto
+                        color = badgeTextColor
                     )
                 }
             }
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            val textoBoton = if (app.esDepurable) {
+            val buttonText = if (app.esDepurable) {
                 stringResource(R.string.btn_backup_action)
             } else {
                 stringResource(R.string.btn_backup_apk)
             }
 
             Button(
-                enabled = !estaEnProgreso,
+                enabled = !isBusy,
                 onClick = {
                     if (app.esDepurable) {
-                        onAbrirOpciones()
+                        onOpenOptions()
                     } else {
-                        onCopiaDirectaApk()
+                        onDirectApkCopy()
                     }
                 }
             ) {
-                Text(text = textoBoton, fontSize = 12.sp)
+                Text(text = buttonText, fontSize = 12.sp)
             }
         }
     }
 }
 
+/**
+ * Tab 1: Package Installer Screen with Container Format Identification and Downgrade Detection.
+ */
 @Composable
 fun InstallerScreen(
     adbManager: AdbConnectionManager,
@@ -1314,6 +1343,13 @@ fun InstallerScreen(
     var parsedApk by remember { mutableStateOf<PackageDetails?>(null) }
     var bundleAnalysis by remember { mutableStateOf<BundleAnalysisResult?>(null) }
     var manifestLam by remember { mutableStateOf<ManifestLam?>(null) }
+    var detectedContainerFormat by remember { mutableStateOf("APK") }
+
+    var installedPkgInfo by remember { mutableStateOf<PackageInfo?>(null) }
+    var isDowngradeDetected by remember { mutableStateOf(false) }
+    var isInstalledDebuggable by remember { mutableStateOf(false) }
+    var showDowngradeWarningDialog by remember { mutableStateOf(false) }
+
     var showLamRestoreDialog by remember { mutableStateOf(false) }
     var parsingError by remember { mutableStateOf<String?>(null) }
 
@@ -1321,17 +1357,59 @@ fun InstallerScreen(
     var installProgress by remember { mutableFloatStateOf(0f) }
     var installStatusMessage by remember { mutableStateOf<String?>(null) }
 
+    fun inspectInstalledVersion(pkgId: String, incomingVersionCode: Long) {
+        val pm = context.packageManager
+        installedPkgInfo = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(pkgId, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(pkgId, 0)
+            }
+        } catch (e: PackageManager.NameNotFoundException) {
+            null
+        }
+
+        val installedCode = if (installedPkgInfo != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                installedPkgInfo!!.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                installedPkgInfo!!.versionCode.toLong()
+            }
+        } else -1L
+
+        isDowngradeDetected = installedPkgInfo != null && incomingVersionCode < installedCode
+        isInstalledDebuggable = installedPkgInfo?.applicationInfo?.let {
+            (it.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        } ?: false
+    }
+
     fun processSelectedUri(uri: Uri) {
         currentUri = uri
         installStatusMessage = null
         parsingError = null
         manifestLam = null
+        installedPkgInfo = null
+        isDowngradeDetected = false
+        isInstalledDebuggable = false
 
         coroutineScope.launch {
             val totalBytes = resolveFileSize(context, uri)
-            val nombre = AdbRestoreManager.resolverNombreArchivo(context, uri)
+            val fileName = AdbRestoreManager.resolverNombreArchivo(context, uri)
+            val lowerName = fileName.lowercase()
 
-            if (nombre.endsWith(".lam", ignoreCase = true)) {
+            // Resolve explicit file container format type (APK, APKS, XAPK, LAM, ZIP)
+            detectedContainerFormat = when {
+                lowerName.endsWith(".xapk") -> "XAPK"
+                lowerName.endsWith(".apks") -> "APKS"
+                lowerName.endsWith(".lam") -> "LAM"
+                lowerName.endsWith(".zip") -> "ZIP"
+                lowerName.endsWith(".apk") -> "APK"
+                else -> "APK"
+            }
+
+            if (detectedContainerFormat == "LAM") {
                 val manifest = withContext(Dispatchers.IO) {
                     AdbRestoreManager.leerManifestDeLam(context, uri)
                 }
@@ -1345,6 +1423,7 @@ fun InstallerScreen(
                         fileSizeBytes = totalBytes,
                         appIcon = null
                     )
+                    inspectInstalledVersion(manifest.packageName, manifest.versionCode)
                 } else {
                     parsingError = context.getString(R.string.restore_err_invalid_lam)
                 }
@@ -1360,8 +1439,9 @@ fun InstallerScreen(
 
                 if (details != null) {
                     parsedApk = details
+                    inspectInstalledVersion(details.identifier, details.versionCode)
                 } else {
-                    parsingError = "No se pudieron extraer los metadatos del paquete."
+                    parsingError = "Could not parse package metadata."
                 }
             }
         }
@@ -1382,40 +1462,72 @@ fun InstallerScreen(
         onDispose { }
     }
 
-    fun iniciarInstalacionLam(uri: Uri, soloApk: Boolean) {
+    // Unified install runner handling monolithic APKs, splits, and .lam bundles
+    fun executeInstallation(allowDowngrade: Boolean = false, apkOnlyInLam: Boolean = false) {
+        val uri = currentUri ?: return
+        showDowngradeWarningDialog = false
         showLamRestoreDialog = false
+
         isInstalling = true
         installProgress = 0f
-        installStatusMessage = "Conectando a ADB..."
+        installStatusMessage = "Connecting to ADB daemon..."
 
         coroutineScope.launch {
-            val puerto = connectPort
-            if (puerto == null) {
+            val port = connectPort
+            if (port == null) {
                 isInstalling = false
-                installStatusMessage = "Error: No se detecta el puerto ADB. Introduce el puerto o usa Sincronizar."
+                installStatusMessage = "Error: ADB port not detected. Sync port or check Settings."
                 return@launch
             }
 
-            val result = withContext(Dispatchers.IO) {
-                AdbRestoreManager.restaurarPaqueteLam(
-                    context = context,
-                    adbManager = adbManager,
-                    targetPort = puerto,
-                    uri = uri,
-                    soloApk = soloApk
-                ) { percent, status ->
-                    installProgress = percent / 100f
-                    installStatusMessage = status
+            if (manifestLam != null) {
+                val result = withContext(Dispatchers.IO) {
+                    AdbRestoreManager.restaurarPaqueteLam(
+                        context = context,
+                        adbManager = adbManager,
+                        targetPort = port,
+                        uri = uri,
+                        soloApk = apkOnlyInLam
+                    ) { percent, status ->
+                        installProgress = percent / 100f
+                        installStatusMessage = status
+                    }
                 }
-            }
 
-            isInstalling = false
-            installStatusMessage = when (result) {
-                is RestoreResult.Success -> {
-                    if (soloApk) "¡Aplicación instalada con éxito!"
-                    else "¡Restauración de app y datos finalizada!"
+                isInstalling = false
+                installStatusMessage = when (result) {
+                    is RestoreResult.Success -> {
+                        if (apkOnlyInLam) "App installed successfully!"
+                        else "App and user data restored successfully!"
+                    }
+                    is RestoreResult.Failure -> "Error: ${result.motivo}"
                 }
-                is RestoreResult.Failure -> "Error: ${result.motivo}"
+            } else {
+                val analysis = bundleAnalysis ?: run {
+                    isInstalling = false
+                    installStatusMessage = "Error: Could not analyze package."
+                    return@launch
+                }
+
+                val result = withContext(Dispatchers.IO) {
+                    AdbPackageInstaller.install(
+                        context = context,
+                        adbManager = adbManager,
+                        targetPort = port,
+                        apkUri = uri,
+                        bundleAnalysis = analysis,
+                        permitirDowngrade = allowDowngrade
+                    ) { percent, status ->
+                        installProgress = percent / 100f
+                        installStatusMessage = status
+                    }
+                }
+
+                isInstalling = false
+                installStatusMessage = when (result) {
+                    is InstallResult.Success -> "Installation completed successfully!"
+                    is InstallResult.Failure -> "Error: ${result.reason}"
+                }
             }
         }
     }
@@ -1427,10 +1539,6 @@ fun InstallerScreen(
             .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = stringResource(id = R.string.app_name),
-            style = MaterialTheme.typography.headlineMedium
-        )
         Text(
             text = stringResource(id = R.string.title_installer),
             style = MaterialTheme.typography.titleMedium,
@@ -1479,13 +1587,13 @@ fun InstallerScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val iconoBitmap = remember(apk.appIcon) {
-                            apk.appIcon?.let { convertirDrawableABitmap(it) }
+                        val iconBitmap = remember(apk.appIcon) {
+                            apk.appIcon?.let { convertDrawableToBitmap(it) }
                         }
 
-                        if (iconoBitmap != null) {
+                        if (iconBitmap != null) {
                             Image(
-                                bitmap = iconoBitmap.asImageBitmap(),
+                                bitmap = iconBitmap.asImageBitmap(),
                                 contentDescription = apk.displayName,
                                 modifier = Modifier.size(56.dp)
                             )
@@ -1513,28 +1621,71 @@ fun InstallerScreen(
                         style = MaterialTheme.typography.bodyMedium
                     )
 
-                    if (manifestLam != null) {
+                    // Version diagnostic and downgrade status compared against installed app
+                    if (installedPkgInfo != null) {
+                        val installedCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            installedPkgInfo!!.longVersionCode
+                        } else {
+                            @Suppress("DEPRECATION")
+                            installedPkgInfo!!.versionCode.toLong()
+                        }
+
                         Text(
-                            text = stringResource(R.string.apk_lam_detected),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
+                            text = stringResource(R.string.apk_version_installed, installedPkgInfo!!.versionName ?: "N/A", installedCode),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    } else if (bundleAnalysis?.isBundle == true) {
-                        val count = bundleAnalysis?.compatibleSplits?.size ?: 0
-                        Text(
-                            text = stringResource(R.string.apk_splits_detected, count),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
-                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        val (badgeColor, badgeLabel) = when {
+                            apk.versionCode < installedCode -> Color(0xFFE65100) to stringResource(R.string.apk_version_status_downgrade)
+                            apk.versionCode > installedCode -> Color(0xFF2E7D32) to stringResource(R.string.apk_version_status_update)
+                            else -> Color(0xFF1565C0) to stringResource(R.string.apk_version_status_same)
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .background(badgeColor, shape = RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = badgeLabel,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
                     } else {
                         Text(
-                            text = stringResource(R.string.apk_single_detected),
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = stringResource(R.string.apk_version_status_new),
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.secondary
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Explicit container format display (APK, APKS, XAPK, LAM, ZIP)
+                    val formatLabelText = when {
+                        manifestLam != null || detectedContainerFormat == "LAM" -> {
+                            "Formato: LAM (Contenedor con APKs + Datos)"
+                        }
+                        bundleAnalysis?.isBundle == true -> {
+                            val count = bundleAnalysis?.compatibleSplits?.size ?: 0
+                            "Formato: $detectedContainerFormat (Bundle con $count partes detectadas)"
+                        }
+                        else -> {
+                            "Formato: $detectedContainerFormat (Monolítico independiente)"
+                        }
+                    }
+
+                    Text(
+                        text = formatLabelText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
 
                     Text(
                         text = stringResource(R.string.apk_size, sizeMb),
@@ -1558,54 +1709,14 @@ fun InstallerScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        val puertoActivo = connectPort
         Button(
             modifier = Modifier.fillMaxWidth(),
             enabled = (bundleAnalysis != null || manifestLam != null) && currentUri != null && !isInstalling,
             onClick = {
-                val uri = currentUri ?: return@Button
-
-                if (manifestLam != null && manifestLam!!.hasPrivateData) {
-                    showLamRestoreDialog = true
-                    return@Button
-                }
-
-                if (manifestLam != null) {
-                    iniciarInstalacionLam(uri, soloApk = true)
-                    return@Button
-                }
-
-                val analysis = bundleAnalysis ?: return@Button
-                isInstalling = true
-                installProgress = 0f
-                installStatusMessage = "Localizando puerto ADB..."
-
-                coroutineScope.launch {
-                    val puerto = puertoActivo
-                    if (puerto == null) {
-                        isInstalling = false
-                        installStatusMessage = "Error: No se detecta el puerto ADB. Introduce el puerto o usa Sincronizar."
-                        return@launch
-                    }
-
-                    val result = withContext(Dispatchers.IO) {
-                        AdbPackageInstaller.install(
-                            context = context,
-                            adbManager = adbManager,
-                            targetPort = puerto,
-                            apkUri = uri,
-                            bundleAnalysis = analysis
-                        ) { percent, status ->
-                            installProgress = percent / 100f
-                            installStatusMessage = status
-                        }
-                    }
-
-                    isInstalling = false
-                    installStatusMessage = when (result) {
-                        is InstallResult.Success -> "¡Instalación completada con éxito!"
-                        is InstallResult.Failure -> "Error: ${result.reason}"
-                    }
+                if (isDowngradeDetected) {
+                    showDowngradeWarningDialog = true
+                } else {
+                    executeInstallation(allowDowngrade = false, apkOnlyInLam = false)
                 }
             }
         ) {
@@ -1635,8 +1746,79 @@ fun InstallerScreen(
         }
     }
 
+    // Downgrade warning confirmation modal (strictly distinguishes Debug vs Release policies)
+    if (showDowngradeWarningDialog && parsedApk != null && installedPkgInfo != null) {
+        val apk = parsedApk!!
+        val installedCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            installedPkgInfo!!.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            installedPkgInfo!!.versionCode.toLong()
+        }
+
+        if (isInstalledDebuggable) {
+            // Case A: Debuggable App - System allows forced in-place downgrade via -d flag
+            AlertDialog(
+                onDismissRequest = { showDowngradeWarningDialog = false },
+                title = { Text(text = stringResource(R.string.title_downgrade_warning)) },
+                text = {
+                    Text(
+                        text = stringResource(
+                            R.string.downgrade_warning_debug_desc,
+                            apk.versionName,
+                            apk.versionCode,
+                            installedPkgInfo!!.versionName ?: "N/A",
+                            installedCode
+                        ),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        onClick = {
+                            executeInstallation(allowDowngrade = true, apkOnlyInLam = false)
+                        }
+                    ) {
+                        Text(text = stringResource(R.string.btn_force_downgrade))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDowngradeWarningDialog = false }) {
+                        Text(text = stringResource(R.string.btn_cancel))
+                    }
+                }
+            )
+        } else {
+            // Case B: Production/Release App - Android kernel/SELinux strictly forbids in-place downgrade
+            AlertDialog(
+                onDismissRequest = { showDowngradeWarningDialog = false },
+                title = { Text(text = stringResource(R.string.title_downgrade_blocked)) },
+                text = {
+                    Text(
+                        text = stringResource(
+                            R.string.downgrade_blocked_release_desc,
+                            apk.versionName,
+                            apk.versionCode,
+                            installedPkgInfo!!.versionName ?: "N/A",
+                            installedCode
+                        ),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { showDowngradeWarningDialog = false }
+                    ) {
+                        Text(text = stringResource(R.string.btn_understood))
+                    }
+                }
+            )
+        }
+    }
+
+    // Modal dialog to select between APK-only or Full Restoration for .lam packages
     if (showLamRestoreDialog && manifestLam != null && currentUri != null) {
-        val uri = currentUri!!
         val manifest = manifestLam!!
         AlertDialog(
             onDismissRequest = { showLamRestoreDialog = false },
@@ -1655,7 +1837,9 @@ fun InstallerScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { iniciarInstalacionLam(uri, soloApk = true) },
+                            .clickable {
+                                executeInstallation(allowDowngrade = false, apkOnlyInLam = true)
+                            },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -1673,7 +1857,9 @@ fun InstallerScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { iniciarInstalacionLam(uri, soloApk = false) },
+                            .clickable {
+                                executeInstallation(allowDowngrade = false, apkOnlyInLam = false)
+                            },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -1697,13 +1883,13 @@ fun InstallerScreen(
     }
 }
 
-private fun convertirDrawableABitmap(drawable: Drawable): Bitmap {
+private fun convertDrawableToBitmap(drawable: Drawable): Bitmap {
     if (drawable is BitmapDrawable && drawable.bitmap != null) {
         return drawable.bitmap
     }
-    val ancho = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 96
-    val alto = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 96
-    val bitmap = Bitmap.createBitmap(ancho, alto, Bitmap.Config.ARGB_8888)
+    val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 96
+    val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 96
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     drawable.setBounds(0, 0, canvas.width, canvas.height)
     drawable.draw(canvas)

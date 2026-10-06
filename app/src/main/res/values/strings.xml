@@ -22,6 +22,8 @@
     <string name="title_split_pairing">Vinculación (Pantalla Dividida)</string>
     <string name="title_manual_connect_port">Puerto de Conexión ADB</string>
     <string name="title_usb_setup">Configuración Inicial USB (Standalone)</string>
+    <string name="title_downgrade_warning">Advertencia de Downgrade</string>
+    <string name="title_downgrade_blocked">Downgrade no permitido por Android</string>
 
     <!-- Estados mDNS y Conexión -->
     <string name="mdns_status_idle">Escáner inactivo.</string>
@@ -54,6 +56,8 @@
     <string name="btn_usb_setup_guide">Autorizar por USB</string>
     <string name="btn_cancel">Cancelar</string>
     <string name="btn_accept">Aceptar</string>
+    <string name="btn_understood">Entendido</string>
+    <string name="btn_force_downgrade">Forzar Downgrade (Debug)</string>
 
     <!-- Textos de Configuración USB -->
     <string name="usb_setup_desc">Para que la app funcione de forma totalmente autónoma (sin códigos ni pantallas divididas), autoriza la conexión local ejecutando una sola vez en tu PC:\n\nadb tcpip 5555\n\nO pulsa el botón inferior si ya estás conectado por TCP local.</string>
@@ -107,12 +111,21 @@
     <string name="apk_no_file_selected">Ningún archivo seleccionado aún.</string>
     <string name="apk_label">Aplicación: %1$s</string>
     <string name="apk_package">Paquete: %1$s</string>
-    <string name="apk_version">Versión: %1$s (Código: %2$d)</string>
+    <string name="apk_version">Versión del archivo: %1$s (Código: %2$d)</string>
+    <string name="apk_version_installed">Versión instalada en el sistema: %1$s (Código: %2$d)</string>
+    <string name="apk_version_status_update">Tipo: Actualización a versión superior</string>
+    <string name="apk_version_status_same">Tipo: Reinstalación de la misma versión</string>
+    <string name="apk_version_status_downgrade">⚠️ ATENCIÓN: Versión inferior a la instalada (Downgrade)</string>
+    <string name="apk_version_status_new">Tipo: Instalación nueva (No instalada)</string>
     <string name="apk_size">Tamaño: %1$.2f MB</string>
-    <string name="apk_splits_detected">Tipo: Bundle con %1$d partes compatibles detectadas</string>
-    <string name="apk_single_detected">Tipo: APK clásico independiente (Monolítico)</string>
-    <string name="apk_lam_detected">Tipo: Contenedor LAM (APK + Datos)</string>
+    <string name="apk_splits_detected">Formato: Bundle con %1$d partes compatibles detectadas</string>
+    <string name="apk_single_detected">Formato: APK clásico independiente (Monolítico)</string>
+    <string name="apk_lam_detected">Formato: Contenedor LAM (APK + Datos)</string>
     <string name="apk_parsing_error">Error al analizar el archivo: %1$s</string>
+
+    <!-- Diálogos de Advertencia y Bloqueo de Downgrade -->
+    <string name="downgrade_warning_debug_desc">Estás a punto de instalar una versión inferior (v%1$s, código %2$d) sobre la actual (v%3$s, código %4$d).\n\nAl ser una aplicación marcada en modo depuración (Debug), Android permite forzar la instalación conservando los datos mediante la bandera -d.\n\n¿Deseas continuar?</string>
+    <string name="downgrade_blocked_release_desc">Estás intentando instalar una versión anterior (v%1$s, código %2$d) sobre una versión más reciente (v%3$s, código %4$d).\n\n⚠️ Por motivos de seguridad, el sistema operativo Android prohíbe terminantemente degradar aplicaciones compiladas en modo producción (Release) sin desinstalarlas previamente.\n\nPara instalar esta versión antigua, debes desinstalar primero la versión actual de forma manual desde el launcher o ajustes del sistema (ten en cuenta que se perderán los datos de la app).</string>
 
     <!-- Estados del Proceso de Instalación -->
     <string name="install_status_idle">Esperando selección de archivo…</string>
