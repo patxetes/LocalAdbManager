@@ -20,7 +20,7 @@
 
 **Local ADB Manager** es una herramienta *standalone* (100% autónoma en el propio dispositivo) diseñada para instalar, respaldar e inspeccionar aplicaciones en Android utilizando el bucle de red local (`127.0.0.1`) y las capacidades del demonio de depuración inalámbrica (`adbd`).
 
-A diferencia de otras soluciones, **no requiere un ordenador conectado por cable, no necesita permisos de Root y no depende de intermediarios como Shizuku**. Implementa su propio cliente ADB en JVM pura, motor criptográfico TLS (RSA 2048 + X.509) y un pipeline nativo de instalación en streaming mediante `cmd package`.
+**No requiere un ordenador conectado por cable ni necesita permisos de Root y no depende de intermediarios como Shizuku para realizar la instalación de APPs (quizás sea necesario conecarlo a través de ADB para hacer la primera configuración)**. Implementa su propio cliente ADB en JVM pura, motor criptográfico TLS (RSA 2048 + X.509) y un pipeline nativo de instalación en streaming mediante `cmd package`.
 
 ---
 
@@ -28,7 +28,7 @@ A diferencia de otras soluciones, **no requiere un ordenador conectado por cable
 
 ### 1. Instalador de Paquetes Universal (Streaming ADB)
 * **Soporte multiformato:** Instala paquetes `.apk` tradicionales, bundles divididos (`.apks`, `.xapk`, `.zip`) y contenedores unificados (`.lam`).
-* **Instalación silenciosa en streaming:** Transmite los binarios directamente a las sesiones de `PackageInstaller` del sistema mediante `cmd package install-create` y `install-write`, sin saturar la memoria RAM.
+* **Optimizaciones para Android 17:** Utiliza el comando nativo `cmd package install-write` inyectando el tamaño exacto en bytes (`-S`) para evitar bloqueos por *timeout* en el kernel al transmitir archivos grandes (ej. +100MB).
 * **Selección inteligente de fragmentos (Splits):**
   * Preserva siempre los fragmentos de densidad de pantalla e idioma (imprescindibles para evitar errores de instalación como `INSTALL_FAILED_MISSING_SPLIT`).
   * Selecciona automáticamente la arquitectura nativa óptima (`arm64-v8a`, `x86_64`, etc.) evitando conflictos de bibliotecas duplicadas.
@@ -48,16 +48,13 @@ A diferencia de otras soluciones, **no requiere un ordenador conectado por cable
   * Incluye la verificación criptográfica **SHA-256** de cada archivo para garantizar que el respaldo no ha sido manipulado ni está corrupto.
 
 ### 4. Orquestador de Restauración Completa
-* **Restauración selectiva:** Al abrir un paquete `.lam`, el usuario puede elegir entre:
-  * *Instalar solo APK / Bundle* (instalación limpia de la app).
-  * *Restaurar App y Datos* (instalación de binarios + inyección de bases de datos/preferencias vía `run-as`).
+* **Restauración selectiva:** Al abrir un paquete `.lam`, el usuario puede elegir entre *Instalar solo APK o Restaurar App y Datos*.
 * **Protección contra *Tar-Slip* (Path Traversal):** Valida cada cabecera durante la descompresión para neutralizar ataques con rutas relativas maliciosas (`../`).
 
 ### 5. Conexión y Emparejamiento Flexible
-* **Descubrimiento mDNS:** Escáner en vivo de puertos efímeros de conexión (`_adb-tls-connect`) y emparejamiento (`_adb-tls-pairing`).
-* **Emparejamiento por Pantalla Dividida (*Split Screen*):** Diálogo ultra-compacto optimizado para introducir el puerto y código sin perder el foco ni cerrar la ventana de Ajustes.
-* **Emparejamiento por Notificación interactiva:** Posibilidad de escribir el código desde la cortina superior de Android.
-* **Conexión Local Directa (Offline / USB):** Acceso rápido para conectar a `127.0.0.1:5555`.
+* **Manejo concurrente:** Las llamadas al socket ADB están protegidas mediante `Mutex` de corrutinas de Kotlin y `ReentrantLock`, garantizando cero colisiones de red.
+* **Emparejamiento por Pantalla Dividida / Notificación:** Diálogos adaptativos para evitar que Android 14+ cierre el servidor de emparejamiento al perder el foco.
+* **Conexión Local Directa (USB Fallback):** Modo manual guiado para conectar a `127.0.0.1:5555` con un solo clic si la red Wi-Fi bloquea los paquetes mDNS.
 
 ---
 
@@ -142,7 +139,7 @@ adb shell am start -n com.localadb.manager/.MainActivity
 ### Stack Tecnológico
 * **Lenguaje:** Kotlin 2.0.0 (código fuente comentado en inglés).
 * **Build System:** Gradle 8.9 con Kotlin DSL (`build.gradle.kts`).
-* **UI Toolkit:** Jetpack Compose (BOM 2024.09.00) + Material 3.
+* **UI Toolkit:** Jetpack Compose (BOM 2024.09.00) + Material 3 (Arquitectura Modular).
 * **Cliente ADB:** `com.github.MuntashirAkon:libadb-android:3.1.1`.
 * **Criptografía:** Conscrypt Android 2.5.3 + BouncyCastle 1.78.1 (RSA/X.509).
 
