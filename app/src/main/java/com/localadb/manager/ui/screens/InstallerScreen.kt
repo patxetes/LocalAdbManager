@@ -409,17 +409,17 @@ fun InstallerScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Explicit container format display (APK, APKS, XAPK, LAM, ZIP)
+                    // Explicit localized container format display
                     val formatLabelText = when {
                         manifestLam != null || detectedContainerFormat == "LAM" -> {
-                            "Formato: LAM (Contenedor con APKs + Datos)"
+                            stringResource(R.string.apk_format_lam)
                         }
                         bundleAnalysis?.isBundle == true -> {
                             val count = bundleAnalysis?.compatibleSplits?.size ?: 0
-                            "Formato: $detectedContainerFormat (Bundle con $count partes detectadas)"
+                            stringResource(R.string.apk_format_bundle, detectedContainerFormat, count)
                         }
                         else -> {
-                            "Formato: $detectedContainerFormat (Monolítico independiente)"
+                            stringResource(R.string.apk_format_monolithic, detectedContainerFormat)
                         }
                     }
 
@@ -489,7 +489,7 @@ fun InstallerScreen(
         }
     }
 
-    // Downgrade warning confirmation modal (strictly distinguishes Debug vs Release policies)
+    // Downgrade warning confirmation modal
     if (showDowngradeWarningDialog && parsedApk != null && installedPkgInfo != null) {
         val apk = parsedApk!!
         val installedCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -500,7 +500,6 @@ fun InstallerScreen(
         }
 
         if (isInstalledDebuggable) {
-            // Case A: Debuggable App - System allows forced in-place downgrade via -d flag
             AlertDialog(
                 onDismissRequest = { showDowngradeWarningDialog = false },
                 title = { Text(text = stringResource(R.string.title_downgrade_warning)) },
@@ -533,7 +532,6 @@ fun InstallerScreen(
                 }
             )
         } else {
-            // Case B: Production/Release App - Android kernel/SELinux strictly forbids in-place downgrade
             AlertDialog(
                 onDismissRequest = { showDowngradeWarningDialog = false },
                 title = { Text(text = stringResource(R.string.title_downgrade_blocked)) },
@@ -560,9 +558,8 @@ fun InstallerScreen(
         }
     }
 
-    // Modal dialog to select between APK-only or Full Restoration for .lam packages
+    // Modal dialog for .lam package options
     if (showLamRestoreDialog && manifestLam != null && currentUri != null) {
-        val uri = currentUri!!
         val manifest = manifestLam!!
         AlertDialog(
             onDismissRequest = { showLamRestoreDialog = false },

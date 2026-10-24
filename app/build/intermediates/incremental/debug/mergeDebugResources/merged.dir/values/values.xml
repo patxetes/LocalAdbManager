@@ -103,6 +103,9 @@
     <string name="adb_status_connecting">Conectando con el demonio ADB…</string>
     <string name="adb_status_disconnected">Estado: Desconectado</string>
     <string name="androidx_startup" translatable="false">androidx.startup</string>
+    <string name="apk_format_bundle">Formato: %1$s (Bundle con %2$d partes detectadas)</string>
+    <string name="apk_format_lam">Formato: LAM (Contenedor con APKs + Datos)</string>
+    <string name="apk_format_monolithic">Formato: %1$s (Monolítico independiente)</string>
     <string name="apk_info_title">Información del Paquete Seleccionado</string>
     <string name="apk_label">Aplicación: %1$s</string>
     <string name="apk_lam_detected">Formato: Contenedor LAM (APK + Datos)</string>
@@ -145,7 +148,7 @@
     <string name="btn_cancel">Cancelar</string>
     <string name="btn_change_port">Cambiar Puerto</string>
     <string name="btn_connect_adb">Conectar a ADB</string>
-    <string name="btn_connect_localhost_5555">Conectar a localhost:5555</string>
+    <string name="btn_connect_localhost_5555">Conectar a 127.0.0.1:5555</string>
     <string name="btn_disconnect_adb">Desconectar</string>
     <string name="btn_force_downgrade">Forzar Downgrade (Debug)</string>
     <string name="btn_install_apk">Instalar por ADB</string>
@@ -157,7 +160,6 @@
     <string name="btn_pair_by_split_desc">Abre una ventana compacta para escribir teniendo Ajustes en la otra mitad.</string>
     <string name="btn_refresh_catalog">Actualizar Lista</string>
     <string name="btn_restore_file">Restaurar Copia (.apk, .apks, .lam, .tar.gz)</string>
-    <string name="btn_run_id_cmd">Ejecutar \"id\"</string>
     <string name="btn_select_apk">Seleccionar archivo (APK, APKS, XAPK, ZIP, LAM)</string>
     <string name="btn_show_pairing_notification">Emparejar</string>
     <string name="btn_start_scan">Iniciar Escaneo mDNS</string>
@@ -181,6 +183,10 @@
     <string name="downgrade_blocked_release_desc">Estás intentando instalar una versión anterior (v%1$s, código %2$d) sobre una versión más reciente (v%3$s, código %4$d).\n\n⚠️ Por motivos de seguridad, el sistema operativo Android prohíbe terminantemente degradar aplicaciones compiladas en modo producción (Release) sin desinstalarlas previamente.\n\nPara instalar esta versión antigua, debes desinstalar primero la versión actual de forma manual desde el launcher o ajustes del sistema (ten en cuenta que se perderán los datos de la app).</string>
     <string name="downgrade_warning_debug_desc">Estás a punto de instalar una versión inferior (v%1$s, código %2$d) sobre la actual (v%3$s, código %4$d).\n\nAl ser una aplicación marcada en modo depuración (Debug), Android permite forzar la instalación conservando los datos mediante la bandera -d.\n\n¿Deseas continuar?</string>
     <string name="dropdown_menu">"Dropdown menu"</string>
+    <string name="help_section_1_desc">Ve a Ajustes > Opciones de desarrollador > Depuración inalámbrica. Asegúrate de que esté activada.\n\nSi es la primera vez que usas la app, debes ir al menú (rueda dentada) > Emparejar Dispositivo, y seguir los pasos para introducir el código de vinculación de 6 dígitos.</string>
+    <string name="help_section_1_title">1. Depuración Inalámbrica (Wi-Fi)</string>
+    <string name="help_section_2_desc">Si tu router bloquea los paquetes mDNS y la app no detecta el puerto automáticamente, puedes usar este modo 100% offline:\n\n1. Conecta el móvil al PC por cable.\n2. Ejecuta en tu terminal: adb tcpip 5555\n3. Desconecta el cable.\n4. Pulsa el botón inferior para conectar de forma manual y autónoma.</string>
+    <string name="help_section_2_title">2. Conexión Local Directa (USB Fallback)</string>
     <string name="in_progress">In progress</string>
     <string name="indeterminate">Partially checked</string>
     <string name="install_status_committing">Confirmando e instalando paquete…</string>
@@ -192,6 +198,8 @@
     <string name="label_connect_port">Puerto de conexión (5 dígitos)</string>
     <string name="label_pairing_code">Código de vinculación (6 dígitos)</string>
     <string name="label_pairing_port">Puerto de vinculación (5 dígitos)</string>
+    <string name="lang_en">English</string>
+    <string name="lang_es">Español</string>
     <string name="m3c_bottom_sheet_collapse_description">Collapse bottom sheet</string>
     <string name="m3c_bottom_sheet_dismiss_description">Dismiss bottom sheet</string>
     <string name="m3c_bottom_sheet_drag_handle_description">Drag handle</string>
@@ -253,11 +261,17 @@
     <string name="m3c_time_picker_pm">PM</string>
     <string name="m3c_tooltip_long_press_label">Show tooltip</string>
     <string name="m3c_tooltip_pane_description">Tooltip</string>
-    <string name="mdns_service_connect_found">Puerto Conexión: %1$d</string>
-    <string name="mdns_service_not_found">Sin puerto detectado (Usa USB o Ajustes)</string>
+    <string name="mdns_service_connect_found">Puerto: %1$d</string>
+    <string name="mdns_service_not_found">Puerto: Desconectado</string>
     <string name="mdns_service_pairing_found">Puerto Emparejamiento: %1$d</string>
     <string name="mdns_status_idle">Escáner inactivo.</string>
     <string name="mdns_status_searching">Buscando depuración Wi-Fi…</string>
+    <string name="menu_dark_mode">Modo Oscuro</string>
+    <string name="menu_help">Ayuda / Manual de Conexión</string>
+    <string name="menu_language">Idioma</string>
+    <string name="menu_pair">Emparejar Dispositivo</string>
+    <string name="menu_settings">Ajustes de Desarrollador</string>
+    <string name="menu_sync">Sincronizar mDNS</string>
     <string name="navigation_menu">"Navigation menu"</string>
     <string name="not_selected">Not selected</string>
     <string name="notification_action_send">Emparejar</string>
@@ -311,23 +325,20 @@
     <string name="template_percent"><ns2:g id="percentage">%1$d</ns2:g> percent.</string>
     <string name="title_backup_catalog">Catálogo de Aplicaciones</string>
     <string name="title_backup_options">Opciones de Respaldo</string>
-    <string name="title_crypto_ok">Hito 1.1: Criptografía Lista</string>
     <string name="title_downgrade_blocked">Downgrade no permitido por Android</string>
     <string name="title_downgrade_warning">Advertencia de Downgrade</string>
+    <string name="title_help">Ayuda y Tutoriales</string>
     <string name="title_installer">Instalador de Paquetes</string>
+    <string name="title_language">Idioma / Language</string>
     <string name="title_manual_connect_port">Puerto de Conexión ADB</string>
     <string name="title_manual_pairing">Emparejamiento ADB</string>
-    <string name="title_mdns_search">Hito 1.2: Escáner mDNS</string>
-    <string name="title_pairing">Hito 1.3: Emparejamiento Local</string>
     <string name="title_pairing_methods">Método de Emparejamiento</string>
     <string name="title_restore">Restaurar Copia de Seguridad</string>
     <string name="title_restore_options">Opciones de Restauración (.lam)</string>
-    <string name="title_shell_exec">Hito 1.4: Consola Shell ADB</string>
     <string name="title_split_pairing">Vinculación (Pantalla Dividida)</string>
     <string name="title_usb_setup">Configuración Inicial USB (Standalone)</string>
     <string name="tooltip_description">tooltip</string>
     <string name="tooltip_label">show tooltip</string>
-    <string name="usb_setup_desc">Para que la app funcione de forma totalmente autónoma (sin códigos ni pantallas divididas), autoriza la conexión local ejecutando una sola vez en tu PC:\n\nadb tcpip 5555\n\nO pulsa el botón inferior si ya estás conectado por TCP local.</string>
     <style name="DialogWindowTheme">
         <item name="android:windowClipToOutline">false</item>
     </style>

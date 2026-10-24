@@ -8,10 +8,6 @@
     <string name="tab_backups">Copias de Seguridad</string>
 
     <!-- Hitos y Títulos -->
-    <string name="title_crypto_ok">Hito 1.1: Criptografía Lista</string>
-    <string name="title_mdns_search">Hito 1.2: Escáner mDNS</string>
-    <string name="title_pairing">Hito 1.3: Emparejamiento Local</string>
-    <string name="title_shell_exec">Hito 1.4: Consola Shell ADB</string>
     <string name="title_installer">Instalador de Paquetes</string>
     <string name="title_backup_catalog">Catálogo de Aplicaciones</string>
     <string name="title_backup_options">Opciones de Respaldo</string>
@@ -24,17 +20,27 @@
     <string name="title_usb_setup">Configuración Inicial USB (Standalone)</string>
     <string name="title_downgrade_warning">Advertencia de Downgrade</string>
     <string name="title_downgrade_blocked">Downgrade no permitido por Android</string>
+    <string name="title_help">Ayuda y Tutoriales</string>
+    <string name="title_language">Idioma / Language</string>
 
-    <!-- Estados mDNS y Conexión -->
+    <!-- Estados mDNS y Conexión (Barra Inferior) -->
     <string name="mdns_status_idle">Escáner inactivo.</string>
     <string name="mdns_status_searching">Buscando depuración Wi-Fi…</string>
-    <string name="mdns_service_connect_found">Puerto Conexión: %1$d</string>
+    <string name="mdns_service_connect_found">Puerto: %1$d</string>
     <string name="mdns_service_pairing_found">Puerto Emparejamiento: %1$d</string>
-    <string name="mdns_service_not_found">Sin puerto detectado (Usa USB o Ajustes)</string>
+    <string name="mdns_service_not_found">Puerto: Desconectado</string>
     <string name="adb_status_disconnected">Estado: Desconectado</string>
     <string name="adb_status_connected">Estado: Conectado a ADB local (127.0.0.1:%1$d)</string>
     <string name="adb_status_connecting">Conectando con el demonio ADB…</string>
     <string name="adb_connection_failed">Error al conectar: %1$s</string>
+
+    <!-- Opciones del Menú (Rueda Dentada) -->
+    <string name="menu_sync">Sincronizar mDNS</string>
+    <string name="menu_pair">Emparejar Dispositivo</string>
+    <string name="menu_settings">Ajustes de Desarrollador</string>
+    <string name="menu_help">Ayuda / Manual de Conexión</string>
+    <string name="menu_dark_mode">Modo Oscuro</string>
+    <string name="menu_language">Idioma</string>
 
     <!-- Botones de la UI -->
     <string name="btn_start_scan">Iniciar Escaneo mDNS</string>
@@ -45,7 +51,6 @@
     <string name="btn_pair_action">Emparejar</string>
     <string name="btn_connect_adb">Conectar a ADB</string>
     <string name="btn_disconnect_adb">Desconectar</string>
-    <string name="btn_run_id_cmd">Ejecutar \"id\"</string>
     <string name="btn_select_apk">Seleccionar archivo (APK, APKS, XAPK, ZIP, LAM)</string>
     <string name="btn_install_apk">Instalar por ADB</string>
     <string name="btn_backup_apk">Copia APK</string>
@@ -58,10 +63,15 @@
     <string name="btn_accept">Aceptar</string>
     <string name="btn_understood">Entendido</string>
     <string name="btn_force_downgrade">Forzar Downgrade (Debug)</string>
+    <string name="btn_connect_localhost_5555">Conectar a 127.0.0.1:5555</string>
+    <string name="lang_es">Español</string>
+    <string name="lang_en">English</string>
 
-    <!-- Textos de Configuración USB -->
-    <string name="usb_setup_desc">Para que la app funcione de forma totalmente autónoma (sin códigos ni pantallas divididas), autoriza la conexión local ejecutando una sola vez en tu PC:\n\nadb tcpip 5555\n\nO pulsa el botón inferior si ya estás conectado por TCP local.</string>
-    <string name="btn_connect_localhost_5555">Conectar a localhost:5555</string>
+    <!-- Tutoriales y Ayuda -->
+    <string name="help_section_1_title">1. Depuración Inalámbrica (Wi-Fi)</string>
+    <string name="help_section_1_desc">Ve a Ajustes > Opciones de desarrollador > Depuración inalámbrica. Asegúrate de que esté activada.\n\nSi es la primera vez que usas la app, debes ir al menú (rueda dentada) > Emparejar Dispositivo, y seguir los pasos para introducir el código de vinculación de 6 dígitos.</string>
+    <string name="help_section_2_title">2. Conexión Local Directa (USB Fallback)</string>
+    <string name="help_section_2_desc">Si tu router bloquea los paquetes mDNS y la app no detecta el puerto automáticamente, puedes usar este modo 100% offline:\n\n1. Conecta el móvil al PC por cable.\n2. Ejecuta en tu terminal: adb tcpip 5555\n3. Desconecta el cable.\n4. Pulsa el botón inferior para conectar de forma manual y autónoma.</string>
 
     <!-- Selector de Métodos de Emparejamiento -->
     <string name="pairing_methods_desc">Android cierra el código de vinculación al cambiar de app. Elige cómo prefieres emparejar:</string>
@@ -175,4 +185,7 @@
     <string name="restore_err_self_restore">No se puede auto-restaurar la aplicación en ejecución para evitar que el sistema detenga el proceso.</string>
     <string name="restore_err_checksum_mismatch">Fallo de integridad: el hash SHA-256 de %1$s no coincide con el manifiesto.</string>
     <string name="restore_err_tar_slip">Archivo de copia inseguro: se detectó una ruta no permitida (%1$s).</string>
+    <string name="apk_format_lam">Formato: LAM (Contenedor con APKs + Datos)</string>
+    <string name="apk_format_bundle">Formato: %1$s (Bundle con %2$d partes detectadas)</string>
+    <string name="apk_format_monolithic">Formato: %1$s (Monolítico independiente)</string>
 </resources>
